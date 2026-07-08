@@ -1,0 +1,28 @@
+[versions]
+kotlin            = "2.4.0"
+jvm               = "21"
+coroutines        = "1.10.2"
+reactive_streams  = "1.0.4"
+slf4j             = "2.0.18"
+logback           = "1.5.18"
+testng            = "7.11.0"
+dokka             = "2.2.0"
+
+[libraries]
+reactive_streams     = { group = "org.reactivestreams",      name = "reactive-streams",            version.ref = "reactive_streams" }
+reactive_streams_tck = { group = "org.reactivestreams",      name = "reactive-streams-tck",        version.ref = "reactive_streams" }
+coroutines_core      = { group = "org.jetbrains.kotlinx",    name = "kotlinx-coroutines-core",     version.ref = "coroutines" }
+coroutines_reactive  = { group = "org.jetbrains.kotlinx",    name = "kotlinx-coroutines-reactive", version.ref = "coroutines" }
+coroutines_test      = { group = "org.jetbrains.kotlinx",    name = "kotlinx-coroutines-test",     version.ref = "coroutines" }
+slf4j_api            = { group = "org.slf4j",                name = "slf4j-api",                   version.ref = "slf4j" }
+logback_classic      = { group = "ch.qos.logback",           name = "logback-classic",             version.ref = "logback" }
+kotlin_test          = { group = "org.jetbrains.kotlin",     name = "kotlin-test",                 version.ref = "kotlin" }
+kotlin_test_junit5   = { group = "org.jetbrains.kotlin",     name = "kotlin-test-junit5",          version.ref = "kotlin" }
+testng               = { group = "org.testng",               name = "testng",                      version.ref = "testng" }
+
+[plugins]
+kotlin_jvm     = { id = "org.jetbrains.kotlin.jvm",              version.ref = "kotlin" }
+mavenPublish   = { id = "maven-publish" }
+signing        = { id = "signing" }
+dokka          = { id = "org.jetbrains.dokka",                   version.ref = "dokka" }
+nexusPublish   = { id = "io.github.gradle-nexus.publish-plugin", version = "2.0.0" }
