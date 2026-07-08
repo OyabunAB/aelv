@@ -5,6 +5,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 
@@ -236,14 +237,22 @@ fun <T : Any> Many<T>.recoverWith(fallback: (AelvException) -> T): Many<T> =
     }
 
 fun <T : Any> Many<T>.retry(times: Long = Long.MAX_VALUE): Many<T> =
+    retry(Policy.retry().maxAttempts(times))
+
+fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
     Many.generate { emit ->
         var attempts = 0L
         while (true) {
             val result = this.collect { emit(it) }
             when {
                 result is Either.Left -> break
-                attempts >= times -> throw (result as Either.Right).value
-                else -> attempts++
+                !policy.filter((result as Either.Right).value) -> throw result.value
+                attempts >= policy.maxAttempts -> throw result.value
+                else -> {
+                    val d = policy.backoff.delayFor(attempts)
+                    if (d.isPositive()) delay(d)
+                    attempts++
+                }
             }
         }
     }
@@ -267,14 +276,22 @@ fun <T : Any> One<T>.recover(fallback: (AelvException) -> T): One<T> =
     }
 
 fun <T : Any> One<T>.retry(times: Long = Long.MAX_VALUE): One<T> =
+    retry(Policy.retry().maxAttempts(times))
+
+fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
     One.generate { emit ->
         var attempts = 0L
         while (true) {
             val result = this.collect { emit(it) }
             when {
                 result is Either.Left -> break
-                attempts >= times -> throw (result as Either.Right).value
-                else -> attempts++
+                !policy.filter((result as Either.Right).value) -> throw result.value
+                attempts >= policy.maxAttempts -> throw result.value
+                else -> {
+                    val d = policy.backoff.delayFor(attempts)
+                    if (d.isPositive()) delay(d)
+                    attempts++
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 class OperatorsTest {
 
@@ -212,6 +213,72 @@ class OperatorsTest {
             val result = Many.error<Int>(cause).retry(times = 2).toList().get()
             assertIs<Either.Right<AelvException>>(result)
         }
+
+        @Test
+        fun `retry with Retry max succeeds after failures`() = runTest {
+            var attempts = 0
+            val result = Many.generate<Int> { emit ->
+                attempts++
+                if (attempts < 3) throw InvalidDemandException(-1)
+                emit(42)
+            }.retry(Policy.retry().maxAttempts(3)).toList().get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertEquals(listOf(42), result.value)
+            assertEquals(3, attempts)
+        }
+
+        @Test
+        fun `retry with Retry max exhausts and propagates`() = runTest {
+            val cause = InvalidDemandException(-1)
+            val result = Many.error<Int>(cause).retry(Policy.retry().maxAttempts(2)).toList().get()
+            assertIs<Either.Right<AelvException>>(result)
+        }
+
+        @Test
+        fun `retry with fixed backoff delays between attempts`() = runTest {
+            var attempts = 0
+            val result = Many.generate<Int> { emit ->
+                attempts++
+                if (attempts < 3) throw InvalidDemandException(-1)
+                emit(42)
+            }.retry(Policy.retry().withBackoff(10.milliseconds).maxAttempts(3)).toList().get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertEquals(3, attempts)
+        }
+
+        @Test
+        fun `retry with exponential backoff succeeds after failures`() = runTest {
+            var attempts = 0
+            val result = Many.generate<Int> { emit ->
+                attempts++
+                if (attempts < 3) throw InvalidDemandException(-1)
+                emit(42)
+            }.retry(Policy.retry().withBackoff(10.milliseconds, 100.milliseconds).maxAttempts(3)).toList().get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertEquals(3, attempts)
+        }
+
+        @Test
+        fun `retry filter skips non-matching errors`() = runTest {
+            val cause = InvalidDemandException(-1)
+            val result = Many.error<Int>(cause)
+                .retry(Policy.retry().on(NoSuchElementException::class).maxAttempts(5))
+                .toList().get()
+            assertIs<Either.Right<AelvException>>(result)
+        }
+
+        @Test
+        fun `retry zero does not retry`() = runTest {
+            var attempts = 0
+            val result = Many.generate<Int> { emit ->
+                attempts++
+                throw InvalidDemandException(-1)
+                @Suppress("UNREACHABLE_CODE")
+                emit(42)
+            }.retry(Policy.retry().maxAttempts(0)).toList().get()
+            assertIs<Either.Right<AelvException>>(result)
+            assertEquals(1, attempts)
+        }
     }
 
     class Terminal {
@@ -304,7 +371,7 @@ class OperatorsTest {
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
                 42
-            }.retry(times = 3).get()
+            }.retry(Policy.retry().maxAttempts(3)).get()
             assertIs<Either.Left<Int>>(result)
             assertEquals(42, result.value)
             assertEquals(3, attempts)
