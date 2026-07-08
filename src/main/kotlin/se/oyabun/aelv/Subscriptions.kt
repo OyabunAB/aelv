@@ -5,6 +5,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import java.util.concurrent.atomic.AtomicBoolean
@@ -19,46 +21,28 @@ internal class StreamSubscription<T : Any>(
     private val demand = AtomicLong(0L)
     private val signal = Channel<Unit>(Channel.UNLIMITED)
     private val terminated = AtomicBoolean(false)
-    private val pending = Channel<T>(Channel.BUFFERED)
     private val started = AtomicBoolean(false)
+    private val emitMutex = Mutex()
 
     private lateinit var producer: Job
-    private lateinit var consumer: Job
 
     private fun start() {
         if (!started.compareAndSet(false, true)) return
-
         producer = scope.launch {
             try {
                 source { item ->
                     awaitDemand()
-                    pending.send(item)
-                }
-                pending.close()
-            } catch (e: CancellationException) {
-                pending.close(e)
-                throw e
-            } catch (e: Throwable) {
-                pending.close(e)
-            }
-        }
-
-        consumer = scope.launch {
-            try {
-                for (item in pending) {
-                    demand.decrementAndGet()
-                    subscriber.onNext(item)
-                }
-                val cause = pending.closedCause()
-                if (terminated.compareAndSet(false, true)) {
-                    when {
-                        cause == null -> subscriber.onComplete()
-                        cause is CancellationException -> Unit
-                        else -> subscriber.onError(cause)
+                    if (terminated.get()) return@source
+                    emitMutex.withLock {
+                        if (!terminated.get()) {
+                            demand.decrementAndGet()
+                            subscriber.onNext(item)
+                        }
                     }
                 }
+                if (terminated.compareAndSet(false, true)) subscriber.onComplete()
             } catch (e: CancellationException) {
-                // downstream cancelled
+                throw e
             } catch (e: Throwable) {
                 if (terminated.compareAndSet(false, true)) subscriber.onError(e)
             }
@@ -73,26 +57,24 @@ internal class StreamSubscription<T : Any>(
             }
             return
         }
-        demand.getAndUpdate { current ->
+        demand.updateAndGet { current ->
             if (current >= Long.MAX_VALUE / 2) Long.MAX_VALUE else current + n
         }
-        repeat(n.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) { signal.trySend(Unit) }
+        signal.trySend(Unit)
         start()
     }
 
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
-            if (started.get()) {
-                producer.cancel()
-                consumer.cancel()
-            }
-            pending.close(CancellationException("subscription cancelled"))
+            if (started.get()) producer.cancel()
             signal.close()
         }
     }
 
     private suspend fun awaitDemand() {
-        while (demand.get() <= 0L && !terminated.get()) {
+        while (!terminated.get()) {
+            val d = demand.get()
+            if (d == Long.MAX_VALUE || d > 0L) return
             signal.receive()
         }
     }
@@ -130,5 +112,3 @@ internal class CompletionSubscription(
         }
     }
 }
-
-private fun <T> Channel<T>.closedCause(): Throwable? = tryReceive().exceptionOrNull()

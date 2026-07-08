@@ -29,7 +29,7 @@ sealed class Either<out A, out B> {
 fun <A> A.left(): Either<A, Nothing> = Either.Left(this)
 fun <B> B.right(): Either<Nothing, B> = Either.Right(this)
 
-sealed class AelvException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+sealed class AelvException(message: String, cause: Throwable? = null) : IllegalArgumentException(message, cause)
 
 class InvalidDemandException(n: Long) :
     AelvException("request must be positive, got $n (RS spec §3.9)")

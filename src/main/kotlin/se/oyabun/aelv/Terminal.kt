@@ -63,8 +63,11 @@ fun <T : Any> Many<T>.drain(
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R> =
     One.generate { emit ->
         var acc = initial
-        this.collect { acc = accumulate(acc, it) }
-        emit(acc)
+        val result = this.collect { acc = accumulate(acc, it) }
+        when (result) {
+            is Either.Left -> emit(acc)
+            is Either.Right -> throw result.value
+        }
     }
 
 fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvException>> =

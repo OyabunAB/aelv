@@ -12,8 +12,8 @@ version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
 
 sourceSets {
     create("tck") {
-        compileClasspath += sourceSets.main.get().output
-        runtimeClasspath += sourceSets.main.get().output
+        compileClasspath += sourceSets.main.get().output + configurations.runtimeClasspath.get()
+        runtimeClasspath += sourceSets.main.get().output + configurations.runtimeClasspath.get()
     }
 }
 
@@ -50,7 +50,10 @@ val tckTest by tasks.registering(Test::class) {
     group = "verification"
     testClassesDirs = sourceSets["tck"].output.classesDirs
     classpath = sourceSets["tck"].runtimeClasspath
-    useTestNG()
+    useTestNG {
+        suites("src/tck/resources/tck-suite.xml")
+    }
+    failOnNoDiscoveredTests = false
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = false

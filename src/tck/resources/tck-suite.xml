@@ -1,0 +1,8 @@
+<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+<suite name="Reactive Streams TCK" verbose="1">
+    <test name="ManyVerification">
+        <classes>
+            <class name="se.oyabun.aelv.tck.ManyVerification"/>
+        </classes>
+    </test>
+</suite>
