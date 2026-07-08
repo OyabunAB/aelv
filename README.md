@@ -1,2 +1,2 @@
-# aelv
+# ≋ aelv
 Minimalistic reactive streams implementation
