@@ -157,6 +157,24 @@ class OperatorsTest {
             assertIs<Either.Left<List<String>>>(result)
             assertEquals(listOf("1a", "2b"), result.value)
         }
+
+        @Test
+        fun `zip does not hang when source A errors after source B completes`() = runTest {
+            // Regression for Bug Z2: post-loop channelA probe must be non-blocking.
+            // Source B is shorter; loop exits after pairing (1,"a"). Source A still has items
+            // buffered.  After jobA is cancelled, the old code called receiveCatching() which
+            // could block if jobA was cancelled mid-send.  Now we use tryReceive().
+            val cause = InvalidDemandException(-1)
+            val sourceA = Many.generate<Int> { emit ->
+                emit(Signal.Upstream.Next(1))
+                emit(Signal.Upstream.Next(2))
+                emit(Signal.Upstream.Error(cause))
+            }
+            val result = zip(sourceA, Many.of("a")) { n, s -> "$n$s" }.toList().get()
+            // Either completes with ["1a"] or surfaces the error from A — either is acceptable.
+            // What must NOT happen is a hang.
+            assertTrue(result is Either.Left || result is Either.Right)
+        }
     }
 
     class Buffer {
@@ -200,7 +218,8 @@ class OperatorsTest {
             val result = Many.generate<Int> { emit ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
-                emit(42)
+                emit(Signal.Upstream.Next(42))
+                emit(Signal.Upstream.Complete)
             }.retry(times = 3).toList().get()
             assertIs<Either.Left<List<Int>>>(result)
             assertEquals(listOf(42), result.value)
@@ -220,7 +239,8 @@ class OperatorsTest {
             val result = Many.generate<Int> { emit ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
-                emit(42)
+                emit(Signal.Upstream.Next(42))
+                emit(Signal.Upstream.Complete)
             }.retry(Policy.retry().maxAttempts(3)).toList().get()
             assertIs<Either.Left<List<Int>>>(result)
             assertEquals(listOf(42), result.value)
@@ -240,7 +260,8 @@ class OperatorsTest {
             val result = Many.generate<Int> { emit ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
-                emit(42)
+                emit(Signal.Upstream.Next(42))
+                emit(Signal.Upstream.Complete)
             }.retry(Policy.retry().withBackoff(10.milliseconds).maxAttempts(3)).toList().get()
             assertIs<Either.Left<List<Int>>>(result)
             assertEquals(3, attempts)
@@ -252,7 +273,8 @@ class OperatorsTest {
             val result = Many.generate<Int> { emit ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
-                emit(42)
+                emit(Signal.Upstream.Next(42))
+                emit(Signal.Upstream.Complete)
             }.retry(Policy.retry().withBackoff(10.milliseconds, 100.milliseconds).maxAttempts(3)).toList().get()
             assertIs<Either.Left<List<Int>>>(result)
             assertEquals(3, attempts)
@@ -273,8 +295,6 @@ class OperatorsTest {
             val result = Many.generate<Int> { emit ->
                 attempts++
                 throw InvalidDemandException(-1)
-                @Suppress("UNREACHABLE_CODE")
-                emit(42)
             }.retry(Policy.retry().maxAttempts(0)).toList().get()
             assertIs<Either.Right<AelvException>>(result)
             assertEquals(1, attempts)
@@ -375,6 +395,129 @@ class OperatorsTest {
             assertIs<Either.Left<Int>>(result)
             assertEquals(42, result.value)
             assertEquals(3, attempts)
+        }
+    }
+
+    class GroupBy {
+
+        @Test
+        fun `groups items by key`() = runTest {
+            val result = Many.of(1, 2, 3, 4, 5, 6)
+                .groupBy({ it % 2 }) { key, group -> group.map { key to it } }
+                .toList()
+                .get()
+            assertIs<Either.Left<List<Pair<Int, Int>>>>(result)
+            val byKey = result.value.groupBy({ it.first }, { it.second })
+            assertEquals(listOf(2, 4, 6), byKey[0]?.sorted())
+            assertEquals(listOf(1, 3, 5), byKey[1]?.sorted())
+        }
+
+        @Test
+        fun `each group receives a terminal Complete`() = runTest {
+            val completed = mutableSetOf<String>()
+            Many.of("a", "b", "a", "c")
+                .groupBy({ it }) { key, group ->
+                    group.doOnComplete { completed.add(key) }.map { key to it }
+                }
+                .toList()
+                .get()
+            assertEquals(setOf("a", "b", "c"), completed)
+        }
+
+        @Test
+        fun `each group receives an Error terminal when source errors`() = runTest {
+            val cause = InvalidDemandException(-1)
+            val errors = mutableMapOf<String, AelvException>()
+            val result = Many.generate<String> { emit ->
+                emit(Signal.Upstream.Next("x"))
+                emit(Signal.Upstream.Next("y"))
+                emit(Signal.Upstream.Error(cause))
+            }
+                .groupBy({ it }) { key, group ->
+                    group.recover { err -> errors[key] = err; Many.empty() }
+                }
+                .recover { Many.empty() }
+                .toList()
+                .get()
+            assertIs<Either.Left<*>>(result)
+            assertEquals(setOf("x", "y"), errors.keys)
+            assertTrue(errors.values.all { it === cause })
+        }
+
+        @Test
+        fun `single-key source produces one group with all items`() = runTest {
+            val result = Many.of(10, 20, 30)
+                .groupBy({ "only" }) { _, group -> group }
+                .toList()
+                .get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertEquals(listOf(10, 20, 30), result.value)
+        }
+
+        @Test
+        fun `empty source emits no items and completes`() = runTest {
+            val result = Many.empty<Int>()
+                .groupBy({ it }) { _, group -> group }
+                .toList()
+                .get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertTrue(result.value.isEmpty())
+        }
+
+        @Test
+        fun `Cancel on outer stream cancels all group pipelines`() = runTest {
+            val result = Many.of(1, 2, 3, 4, 5, 6)
+                .groupBy({ it % 2 }) { _, group -> group }
+                .take(1)
+                .toList()
+                .get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertEquals(1, result.value.size)
+        }
+
+        @Test
+        fun `group Complete is delivered before outer stream Complete`() = runTest {
+            // Regression for Bug G1/G3: operator owns subscriptions so this is now structural.
+            val completedGroups = mutableSetOf<Int>()
+            Many.of(1, 2, 3, 4, 5, 6)
+                .groupBy({ it % 3 }) { key, group ->
+                    group.doOnComplete { completedGroups.add(key) }.map { key }
+                }
+                .toList()
+                .get()
+            assertEquals(setOf(0, 1, 2), completedGroups)
+        }
+
+        @Test
+        fun `group Error is delivered before outer stream Error`() = runTest {
+            // Regression for Bug G3.
+            val cause = InvalidDemandException(-1)
+            val erroredGroups = mutableSetOf<Int>()
+            Many.generate<Int> { emit ->
+                emit(Signal.Upstream.Next(1))
+                emit(Signal.Upstream.Next(2))
+                emit(Signal.Upstream.Next(3))
+                emit(Signal.Upstream.Error(cause))
+            }
+                .groupBy({ it % 2 }) { key, group ->
+                    group.doOnError { erroredGroups.add(key) }.recover { Many.empty() }
+                }
+                .recover { Many.empty() }
+                .toList()
+                .get()
+            assertEquals(setOf(0, 1), erroredGroups)
+        }
+
+        @Test
+        fun `groupHandler can apply different transforms per key`() = runTest {
+            val result = Many.of(1, 2, 3, 4)
+                .groupBy({ it % 2 }) { key, group ->
+                    if (key == 0) group.map { it * 10 } else group.map { it * 100 }
+                }
+                .toList()
+                .get()
+            assertIs<Either.Left<List<Int>>>(result)
+            assertEquals(setOf(20, 40, 100, 300), result.value.toSet())
         }
     }
 }

@@ -37,8 +37,8 @@ fun <T : Any> Many<T>.subscribe(
             val error = t as? AelvException ?: UpstreamErrorException(t)
             try {
                 onError(error)
-            } catch (e: Throwable) {
-                log.stream.error("subscribe.onError handler threw", e)
+            } catch (e: Exception) {
+                log.stream.error("subscriber.onError", e)
             }
         }
 
@@ -63,28 +63,34 @@ fun <T : Any> Many<T>.drain(
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R> =
     One.generate { emit ->
         var acc = initial
-        val result = this.collect { acc = accumulate(acc, it) }
+        val result = collect { value ->
+            acc = accumulate(acc, value)
+            Signal.Downstream.Request(1)
+        }
         when (result) {
-            is Either.Left -> emit(acc)
-            is Either.Right -> throw result.value
+            is Either.Left  -> { emit(Signal.Upstream.Next(acc)); emit(Signal.Upstream.Complete) }
+            is Either.Right -> emit(Signal.Upstream.Error(result.value))
         }
     }
 
 fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvException>> =
     One.generate { emit ->
         var acc: Any = Unset
-        val result = this.collect { item ->
+        val result = collect { item ->
             @Suppress("UNCHECKED_CAST")
             acc = if (acc === Unset) item else accumulate(acc as T, item)
+            Signal.Downstream.Request(1)
         }
-        when {
-            result is Either.Right -> emit(result)
-            acc === Unset -> emit(NoSuchElementException().right())
-            else -> {
+        val value: Either<T, AelvException> = when {
+            result is Either.Right -> result
+            acc === Unset          -> NoSuchElementException().right()
+            else                   -> {
                 @Suppress("UNCHECKED_CAST")
-                emit((acc as T).left())
+                (acc as T).left()
             }
         }
+        emit(Signal.Upstream.Next(value))
+        emit(Signal.Upstream.Complete)
     }
 
 fun <T : Any> Many<T>.toList(): One<List<T>> = fold(emptyList()) { acc, item -> acc + item }
@@ -93,26 +99,32 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> = fold(emptySet()) { acc, item -> acc
 
 suspend fun <T : Any> Many<T>.first(): Either<T, AelvException> {
     var result: Any = Unset
-    val outcome = this.take(1).collect { result = it }
+    val outcome = collect { value ->
+        result = value
+        Signal.Downstream.Cancel
+    }
     return when {
-        result !== Unset -> {
+        result !== Unset        -> {
             @Suppress("UNCHECKED_CAST")
             (result as T).left()
         }
         outcome is Either.Right -> outcome
-        else -> NoSuchElementException().right()
+        else                    -> NoSuchElementException().right()
     }
 }
 
 suspend fun <T : Any> Many<T>.last(): Either<T, AelvException> {
     var result: Any = Unset
-    val outcome = this.collect { result = it }
+    val outcome = collect { value ->
+        result = value
+        Signal.Downstream.Request(1)
+    }
     return when {
-        result !== Unset -> {
+        result !== Unset        -> {
             @Suppress("UNCHECKED_CAST")
             (result as T).left()
         }
         outcome is Either.Right -> outcome
-        else -> NoSuchElementException().right()
+        else                    -> NoSuchElementException().right()
     }
 }

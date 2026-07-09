@@ -43,7 +43,10 @@ class PublishersTest {
         @Test
         fun `cold - each subscriber gets independent execution`() = runTest {
             var count = 0
-            val many = Many.generate<Int> { emit -> emit(++count) }
+            val many = Many.generate<Int> { emit ->
+                emit(Signal.Upstream.Next(++count))
+                emit(Signal.Upstream.Complete)
+            }
             val r1 = many.toList().get()
             val r2 = many.toList().get()
             assertIs<Either.Left<List<Int>>>(r1)
