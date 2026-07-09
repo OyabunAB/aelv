@@ -1,9 +1,6 @@
 package se.oyabun.aelv
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -38,12 +35,11 @@ class Many<T : Any> private constructor(
 ) : Publisher<T> {
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val subscription = StreamSubscription(subscriber, scope, source)
+        val subscription = StreamSubscription(subscriber, source)
         try {
             subscriber.onSubscribe(subscription)
         } catch (e: Throwable) {
-            scope.cancel()
+            subscription.cancel()
             throw e
         }
     }
@@ -168,12 +164,11 @@ class One<T : Any> private constructor(
 ) : Publisher<T> {
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val subscription = StreamSubscription(subscriber, scope, source)
+        val subscription = StreamSubscription(subscriber, source)
         try {
             subscriber.onSubscribe(subscription)
         } catch (e: Throwable) {
-            scope.cancel()
+            subscription.cancel()
             throw e
         }
     }
@@ -307,12 +302,11 @@ class None<T : Any> private constructor(
 ) : Publisher<Nothing> {
 
     override fun subscribe(subscriber: Subscriber<in Nothing>) {
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val subscription = CompletionSubscription(subscriber, scope, source)
+        val subscription = CompletionSubscription(subscriber, source)
         try {
             subscriber.onSubscribe(subscription)
         } catch (e: Throwable) {
-            scope.cancel()
+            subscription.cancel()
             throw e
         }
     }
