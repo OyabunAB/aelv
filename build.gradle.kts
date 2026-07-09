@@ -33,7 +33,10 @@ dependencies {
     "tckImplementation"(libs.logback.classic)
 }
 
-val isRelease = Regex("""^\d+\.\d+\.\d+$""").matches(version.toString())
+version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
+
+val isPublishable = !version.toString().endsWith("-SNAPSHOT")
+val isRelease     = Regex("""^\d+\.\d+\.\d+$""").matches(version.toString())
 val signingKey: String? = System.getenv("GPG_SIGNING_KEY")
 val signingPassword: String? = System.getenv("GPG_SIGNING_PASSWORD")
 
@@ -81,7 +84,7 @@ val javadocJar = tasks.register<Jar>("javadocJar") {
     from(layout.buildDirectory.dir("dokka/html"))
 }
 
-if (isRelease && signingKey != null) {
+if (isPublishable && signingKey != null) {
     signing {
         useInMemoryPgpKeys(signingKey, signingPassword)
         sign(publishing.publications["maven"])

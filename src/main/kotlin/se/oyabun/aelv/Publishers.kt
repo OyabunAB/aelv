@@ -7,10 +7,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.reactive.asFlow as publisherAsFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.resume
 import kotlin.time.Duration
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
@@ -70,12 +75,13 @@ class Many<T : Any> private constructor(
             }
         } catch (e: AelvException) {
             error = e
+        } catch (e: Throwable) {
+            error = UpstreamErrorException(e)
         }
         return error?.right() ?: Unit.left()
     }
 
     companion object {
-
         /**
          * Creates a [Many] that emits [items] in order then completes.
          * Cancellation is respected between items.
@@ -202,15 +208,13 @@ class One<T : Any> private constructor(
             }
         } catch (e: AelvException) {
             error = e
+        } catch (e: Throwable) {
+            error = UpstreamErrorException(e)
         }
         return error?.right() ?: Unit.left()
     }
 
     companion object {
-
-        /**
-         * Creates a [One] that emits [value] then completes.
-         */
         fun <T : Any> of(value: T): One<T> = One { emit ->
             if (emit(Signal.Upstream.Next(value)) != Signal.Downstream.Cancel)
                 emit(Signal.Upstream.Complete)
@@ -220,8 +224,9 @@ class One<T : Any> private constructor(
          * Creates a [One] that lazily evaluates [block] on each subscription and emits the result.
          * Exceptions thrown by [block] are propagated as [UpstreamErrorException].
          */
-        fun <T : Any> defer(block: suspend () -> T): One<T> = One { emit ->
-            if (emit(Signal.Upstream.Next(block())) != Signal.Downstream.Cancel)
+        fun <T : Any> defer(context: CoroutineContext? = null, block: suspend () -> T): One<T> = One { emit ->
+            val value = if (context != null) withContext(currentCoroutineContext() + context) { block() } else block()
+            if (emit(Signal.Upstream.Next(value)) != Signal.Downstream.Cancel)
                 emit(Signal.Upstream.Complete)
         }
 
@@ -252,6 +257,42 @@ class One<T : Any> private constructor(
 
         /** A [One] that never emits or completes.  Useful for testing and timeouts. */
         fun <T : Any> never(): One<T> = One { awaitCancellation() }
+
+        /**
+         * Creates a [One] by invoking [block] with a callback pair: call [success] with a value
+         * to emit it and complete, or call [failure] with a [Throwable] to signal an error.
+         *
+         * Designed for bridging callback-based async APIs (e.g. Kafka producer send):
+         * ```kotlin
+         * One.create { success, failure ->
+         *     producer.send(record) { metadata, ex ->
+         *         if (ex != null) failure(ex) else success(metadata.offset())
+         *     }
+         * }
+         * ```
+         *
+         * The coroutine suspends until exactly one of [success] or [failure] is invoked.
+         * Subsequent calls are ignored.  If the coroutine is cancelled before either callback
+         * fires, cancellation propagates normally.
+         */
+        fun <T : Any> create(block: (success: (T) -> Unit, failure: (Throwable) -> Unit) -> Unit): One<T> =
+            One.generate { emit ->
+                val result = suspendCancellableCoroutine<Either<T, Throwable>> { cont ->
+                    block(
+                        { value -> cont.resume(value.left()) },
+                        { cause -> cont.resume(cause.right()) },
+                    )
+                }
+                when (result) {
+                    is Either.Left  -> {
+                        if (emit(Signal.Upstream.Next(result.value)) != Signal.Downstream.Cancel)
+                            emit(Signal.Upstream.Complete)
+                    }
+                    is Either.Right -> emit(Signal.Upstream.Error(
+                        result.value as? AelvException ?: UpstreamErrorException(result.value)
+                    ))
+                }
+            }
     }
 }
 
@@ -285,8 +326,12 @@ class None<T : Any> private constructor(
     suspend fun await(): Either<Unit, AelvException> = try {
         source()
         Unit.left()
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: AelvException) {
         e.right()
+    } catch (e: Throwable) {
+        UpstreamErrorException(e).right()
     }
 
     companion object {
@@ -295,7 +340,17 @@ class None<T : Any> private constructor(
          * Creates a [None] that executes [block] on each subscription.
          * Exceptions thrown by [block] are propagated as errors.
          */
-        fun <T : Any> defer(block: suspend () -> Unit): None<T> = None(block)
+        fun <T : Any> defer(context: CoroutineContext? = null, block: suspend () -> Unit): None<T> = None {
+            try {
+                if (context != null) withContext(context) { block() } else block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AelvException) {
+                throw e
+            } catch (e: Throwable) {
+                throw UpstreamErrorException(e)
+            }
+        }
 
         internal fun <T : Any> generate(block: suspend () -> Unit): None<T> = None(block)
 

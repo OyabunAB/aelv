@@ -65,7 +65,3 @@ class NoSuchElementException :
 /** Wraps a non-[AelvException] throwable received from an upstream publisher. */
 class UpstreamErrorException(cause: Throwable) :
     AelvException("upstream publisher signalled an error", cause)
-
-/** Wraps an exception thrown inside an operator's internal logic. */
-class OperatorException(operator: String, cause: Throwable) :
-    AelvException("[$operator] ${cause.message ?: cause::class.simpleName}", cause)

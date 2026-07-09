@@ -9,7 +9,7 @@ import kotlin.time.Duration
  */
 sealed class Backoff {
     /** No delay between retry attempts. */
-    object None : Backoff()
+    data object None : Backoff()
 
     /** A constant [delay] between every retry attempt. */
     data class Fixed(val delay: Duration) : Backoff()

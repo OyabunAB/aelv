@@ -4,6 +4,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -23,6 +24,24 @@ fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> =
         source { signal ->
             when (signal) {
                 is Signal.Upstream.Next     -> emit(Signal.Upstream.Next(transform(signal.value)))
+                is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
+                is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(signal.cause))
+            }
+        }
+    }
+
+/**
+ * Applies [transform] to each item and emits the result only when it is non-null.
+ * Null results are silently dropped and demand is replenished from upstream.
+ */
+fun <T : Any, R : Any> Many<T>.mapNotNull(transform: (T) -> R?): Many<R> =
+    Many.generate { emit ->
+        source { signal ->
+            when (signal) {
+                is Signal.Upstream.Next     -> {
+                    val r = transform(signal.value)
+                    if (r != null) emit(Signal.Upstream.Next(r)) else Signal.Downstream.Request(1)
+                }
                 is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
                 is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(signal.cause))
             }
@@ -227,11 +246,74 @@ fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     flatMap(concurrency = 1, transform = transform)
 
 /**
- * Maps each item to a [Many] and subscribes to them one at a time, preserving upstream order.
- * Equivalent to [concatMap] — an alias that documents the ordering guarantee explicitly.
+ * Maps each item to a [Many], subscribing to up to [maxConcurrency] inner streams concurrently,
+ * but emitting results in upstream order.  Completed-but-out-of-order results are held until
+ * all earlier inner streams have drained.
+ *
+ * With `maxConcurrency = 1` this is identical to [concatMap].
  */
-fun <T : Any, R : Any> Many<T>.flatMapSequential(transform: (T) -> Many<R>): Many<R> =
-    flatMap(concurrency = 1, transform = transform)
+fun <T : Any, R : Any> Many<T>.flatMapSequential(
+    maxConcurrency: Int = Int.MAX_VALUE,
+    transform: (T) -> Many<R>,
+): Many<R> = if (maxConcurrency == 1) concatMap(transform) else Many.generate { emit ->
+    require(maxConcurrency > 0) { "maxConcurrency must be positive, got $maxConcurrency" }
+    val semaphore = if (maxConcurrency < Int.MAX_VALUE) Semaphore(maxConcurrency) else null
+    // One ordered-output channel per inner subscription — each coroutine drains its inner Many
+    // into its own channel; the collector fans them out in order.
+    val orderChannel = Channel<Channel<Signal.Upstream<R>>>(Channel.UNLIMITED)
+    coroutineScope {
+        val producerJob = launch {
+            var outerError: Signal.Upstream.Error? = null
+            source { signal ->
+                when (signal) {
+                    is Signal.Upstream.Next -> {
+                        semaphore?.acquire()
+                        val innerChannel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
+                        orderChannel.send(innerChannel)
+                        launch {
+                            try {
+                                transform(signal.value).source { inner ->
+                                    when (inner) {
+                                        is Signal.Upstream.Next     -> { innerChannel.send(inner); Signal.Downstream.Request(1) }
+                                        is Signal.Upstream.Complete -> { innerChannel.close(); Signal.Downstream.Cancel }
+                                        is Signal.Upstream.Error    -> { innerChannel.close(inner.cause); Signal.Downstream.Cancel }
+                                    }
+                                }
+                            } finally {
+                                semaphore?.release()
+                                innerChannel.close()
+                            }
+                        }
+                        Signal.Downstream.Request(1)
+                    }
+                    is Signal.Upstream.Complete -> Signal.Downstream.Cancel
+                    is Signal.Upstream.Error    -> { outerError = signal; Signal.Downstream.Cancel }
+                }
+            }
+            orderChannel.send(Channel<Signal.Upstream<R>>(0).also { it.close(outerError?.cause) })
+            orderChannel.close()
+        }
+        var cancelled = false
+        for (innerChannel in orderChannel) {
+            if (cancelled) { innerChannel.cancel(); continue }
+            for (signal in innerChannel) {
+                when (signal) {
+                    is Signal.Upstream.Next -> if (emit(signal) == Signal.Downstream.Cancel) {
+                        cancelled = true; producerJob.cancel(); break
+                    }
+                    else -> break
+                }
+            }
+            val failure = innerChannel.receiveCatching().exceptionOrNull()
+            if (failure != null && !cancelled) {
+                cancelled = true
+                producerJob.cancel()
+                emit(Signal.Upstream.Error(if (failure is AelvException) failure else UpstreamErrorException(failure)))
+            }
+        }
+        if (!cancelled) emit(Signal.Upstream.Complete)
+    }
+}
 
 /**
  * Maps each item to a [Many], cancels the previous inner subscription when a new item arrives,
@@ -710,21 +792,17 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
     keySelector: (T) -> K,
     groupHandler: (key: K, group: Many<T>) -> Many<R>,
 ): Many<R> = Many.generate { emit ->
-    // One RENDEZVOUS channel per group key.  Each group's channel is drained by a dedicated
-    // coroutine that runs groupHandler and forwards results to the shared output channel.
-    // The source sends directly — back-pressure propagates naturally.  Because the operator
-    // owns all group subscriptions, the caller cannot accidentally leave a group unsubscribed.
     val groupChannels = mutableMapOf<K, Channel<Signal.Upstream<T>>>()
-    val out = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
-    val remaining = AtomicInteger(0)
+    val out           = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
+    val remaining     = AtomicInteger(0)
     coroutineScope {
         val producerJob = launch {
             source { signal ->
                 when (signal) {
                     is Signal.Upstream.Next -> {
                         val key = keySelector(signal.value)
-                        val ch = groupChannels.getOrPut(key) {
-                            val newCh = Channel<Signal.Upstream<T>>(Channel.RENDEZVOUS)
+                        val ch  = groupChannels.getOrPut(key) {
+                            val newCh = Channel<Signal.Upstream<T>>(Channel.UNLIMITED)
                             remaining.incrementAndGet()
                             launch {
                                 val groupMany = Many.generate<T> { groupEmit ->
@@ -754,9 +832,6 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                         Signal.Downstream.Cancel
                     }
                     is Signal.Upstream.Error -> {
-                        // Broadcast error to all group pipelines — they handle it via groupHandler
-                        // (recover, doOnError, etc.) and propagate to out if unhandled.
-                        // Do NOT send directly to out: that bypasses the group handlers.
                         for ((_, ch) in groupChannels) runCatching { ch.send(signal) }
                         if (remaining.get() == 0) out.close()
                         Signal.Downstream.Cancel
@@ -933,7 +1008,7 @@ fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
 fun <T : Any> Many<T>.publishOn(context: CoroutineContext): Many<T> =
     Many.generate { emit ->
         source { signal ->
-            withContext(context) { emit(signal) }
+            withContext(currentCoroutineContext() + context) { emit(signal) }
         }
     }
 
@@ -943,7 +1018,7 @@ fun <T : Any> Many<T>.publishOn(context: CoroutineContext): Many<T> =
  */
 fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
     Many.generate { emit ->
-        withContext(context) {
+        withContext(currentCoroutineContext() + context) {
             source { emit(it) }
         }
     }
@@ -955,12 +1030,12 @@ fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
 fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R): One<R> =
     One.generate { emit ->
         var valueA: Any = Unset
-        var valueB: Any = Unset
-        var error: AelvException? = null
-        a.collect { v -> valueA = v; Signal.Downstream.Cancel }
+        val resultA = a.collect { v -> valueA = v; Signal.Downstream.Cancel }
+        if (resultA.isRight()) { emit(Signal.Upstream.Error(resultA.rightOrNull()!!)); return@generate }
         if (valueA === Unset) { emit(Signal.Upstream.Complete); return@generate }
-        b.collect { v -> valueB = v; Signal.Downstream.Cancel }
-        if (error != null) { emit(Signal.Upstream.Error(error!!)); return@generate }
+        var valueB: Any = Unset
+        val resultB = b.collect { v -> valueB = v; Signal.Downstream.Cancel }
+        if (resultB.isRight()) { emit(Signal.Upstream.Error(resultB.rightOrNull()!!)); return@generate }
         if (valueB === Unset) { emit(Signal.Upstream.Complete); return@generate }
         @Suppress("UNCHECKED_CAST")
         val r = transform(valueA as A, valueB as B)
@@ -1109,7 +1184,7 @@ fun <T : Any> One<T>.doFinally(action: (Signal.Terminal) -> Unit): One<T> =
 fun <T : Any> One<T>.publishOn(context: CoroutineContext): One<T> =
     One.generate { emit ->
         source { signal ->
-            withContext(context) { emit(signal) }
+            withContext(currentCoroutineContext() + context) { emit(signal) }
         }
     }
 
@@ -1118,7 +1193,7 @@ fun <T : Any> One<T>.publishOn(context: CoroutineContext): One<T> =
  */
 fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
     One.generate { emit ->
-        withContext(context) {
+        withContext(currentCoroutineContext() + context) {
             source { emit(it) }
         }
     }

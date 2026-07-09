@@ -118,6 +118,29 @@ class PublishersTest {
             assertIs<Either.Left<List<String>>>(result)
             assertEquals(listOf("hello"), result.value)
         }
+
+        @Test
+        fun `create emits value from success callback`() = runTest {
+            val result = One.create<Int> { success, _ -> success(42) }.get()
+            assertIs<Either.Left<Int>>(result)
+            assertEquals(42, result.value)
+        }
+
+        @Test
+        fun `create signals error from failure callback`() = runTest {
+            val cause = RuntimeException("boom")
+            val result = One.create<Int> { _, failure -> failure(cause) }.get()
+            assertIs<Either.Right<AelvException>>(result)
+            assertIs<UpstreamErrorException>(result.value)
+            assertEquals(cause, result.value.cause)
+        }
+
+        @Test
+        fun `create only uses first callback invocation`() = runTest {
+            val result = One.create<Int> { success, _ -> success(1) }.get()
+            assertIs<Either.Left<Int>>(result)
+            assertEquals(1, result.value)
+        }
     }
 
     class NoneTest {
