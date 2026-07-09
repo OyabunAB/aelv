@@ -17,6 +17,9 @@ internal class StreamSubscription<T : Any>(
     private val source: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
 ) : Subscription {
 
+    private val log = Logging.of<StreamSubscription<*>>()
+    private val name = subscriber::class.simpleName ?: "Subscriber"
+
     private val demand = AtomicLong(0L)
     private val signal = Channel<Unit>(Channel.UNLIMITED)
     private val terminated = AtomicBoolean(false)
@@ -24,6 +27,7 @@ internal class StreamSubscription<T : Any>(
     private val producer = AtomicReference<Job?>(null)
 
     private fun start() {
+        log.stream.subscribing(name)
         val job = scope.launch {
             try {
                 source { upstream ->
@@ -38,11 +42,17 @@ internal class StreamSubscription<T : Any>(
                             else Signal.Downstream.Request(1)
                         }
                         is Signal.Upstream.Complete -> {
-                            if (terminated.compareAndSet(false, true)) subscriber.onComplete()
+                            if (terminated.compareAndSet(false, true)) {
+                                log.stream.completed(name)
+                                subscriber.onComplete()
+                            }
                             Signal.Downstream.Cancel
                         }
                         is Signal.Upstream.Error -> {
-                            if (terminated.compareAndSet(false, true)) subscriber.onError(upstream.cause)
+                            if (terminated.compareAndSet(false, true)) {
+                                log.stream.error(name, upstream.cause)
+                                subscriber.onError(upstream.cause)
+                            }
                             Signal.Downstream.Cancel
                         }
                     }
@@ -50,7 +60,10 @@ internal class StreamSubscription<T : Any>(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                if (terminated.compareAndSet(false, true)) subscriber.onError(e)
+                if (terminated.compareAndSet(false, true)) {
+                    log.stream.error(name, e)
+                    subscriber.onError(e)
+                }
             }
         }
         // Store the job first, then check terminated so cancel() always sees it.
@@ -67,6 +80,7 @@ internal class StreamSubscription<T : Any>(
             }
             return
         }
+        log.subscription.requested(name, n)
         demand.updateAndGet { current ->
             if (current >= Long.MAX_VALUE / 2) Long.MAX_VALUE else current + n
         }
@@ -76,6 +90,7 @@ internal class StreamSubscription<T : Any>(
 
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
+            log.stream.cancelled(name)
             producer.get()?.cancel()
             signal.close()
         }
@@ -85,6 +100,7 @@ internal class StreamSubscription<T : Any>(
         while (!terminated.get()) {
             val d = demand.get()
             if (d == Long.MAX_VALUE || d > 0L) return
+            log.subscription.backpressure(name)
             val result = signal.receiveCatching()
             if (result.isClosed) return
         }
@@ -97,18 +113,28 @@ internal class CompletionSubscription(
     private val source: suspend () -> Unit,
 ) : Subscription {
 
+    private val log = Logging.of<CompletionSubscription>()
+    private val name = subscriber::class.simpleName ?: "Subscriber"
+
     private val terminated = AtomicBoolean(false)
     private val producer = AtomicReference<Job?>(null)
 
     private fun start() {
+        log.stream.subscribing(name)
         val job = scope.launch {
             try {
                 source()
-                if (terminated.compareAndSet(false, true)) subscriber.onComplete()
+                if (terminated.compareAndSet(false, true)) {
+                    log.stream.completed(name)
+                    subscriber.onComplete()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                if (terminated.compareAndSet(false, true)) subscriber.onError(e)
+                if (terminated.compareAndSet(false, true)) {
+                    log.stream.error(name, e)
+                    subscriber.onError(e)
+                }
             }
         }
         if (!producer.compareAndSet(null, job)) job.cancel()
@@ -122,11 +148,13 @@ internal class CompletionSubscription(
             }
             return
         }
+        log.subscription.requested(name, n)
         start()
     }
 
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
+            log.stream.cancelled(name)
             producer.get()?.cancel()
         }
     }

@@ -8,8 +8,10 @@ import kotlin.time.Duration
  * Backoff strategy between retry attempts.
  */
 sealed class Backoff {
+    /** No delay between retry attempts. */
     object None : Backoff()
 
+    /** A constant [delay] between every retry attempt. */
     data class Fixed(val delay: Duration) : Backoff()
 
     /**

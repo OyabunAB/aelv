@@ -15,6 +15,9 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 import org.reactivestreams.Publisher
 
+private val log = Logging.of<Many<*>>()
+
+/** Transforms each item by applying [transform] to it. */
 fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> =
     Many.generate { emit ->
         source { signal ->
@@ -26,6 +29,7 @@ fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> =
         }
     }
 
+/** Emits only items for which [predicate] returns true. */
 fun <T : Any> Many<T>.filter(predicate: (T) -> Boolean): Many<T> =
     Many.generate { emit ->
         source { signal ->
@@ -37,6 +41,7 @@ fun <T : Any> Many<T>.filter(predicate: (T) -> Boolean): Many<T> =
         }
     }
 
+/** Emits at most [n] items then completes.  Requires `n >= 0`. */
 fun <T : Any> Many<T>.take(n: Long): Many<T> {
     require(n >= 0) { "take count must be non-negative, got $n" }
     return Many.generate { emit ->
@@ -62,6 +67,7 @@ fun <T : Any> Many<T>.take(n: Long): Many<T> {
     }
 }
 
+/** Emits items while [predicate] returns true; completes on the first non-matching item. */
 fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
     Many.generate { emit ->
         source { signal ->
@@ -78,6 +84,7 @@ fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
         }
     }
 
+/** Drops the first [n] items then emits the rest.  Requires `n >= 0`. */
 fun <T : Any> Many<T>.skip(n: Long): Many<T> {
     require(n >= 0) { "skip count must be non-negative, got $n" }
     return Many.generate { emit ->
@@ -92,6 +99,7 @@ fun <T : Any> Many<T>.skip(n: Long): Many<T> {
     }
 }
 
+/** Drops items while [predicate] returns true; emits all items once the predicate first returns false. */
 fun <T : Any> Many<T>.skipWhile(predicate: (T) -> Boolean): Many<T> =
     Many.generate { emit ->
         var skipping = true
@@ -109,6 +117,7 @@ fun <T : Any> Many<T>.skipWhile(predicate: (T) -> Boolean): Many<T> =
         }
     }
 
+/** Emits only items that have not been seen before, using [equals] for comparison. */
 fun <T : Any> Many<T>.distinct(): Many<T> =
     Many.generate { emit ->
         val seen = HashSet<T>()
@@ -121,6 +130,7 @@ fun <T : Any> Many<T>.distinct(): Many<T> =
         }
     }
 
+/** Suppresses consecutive duplicate items; non-adjacent duplicates are still emitted. */
 fun <T : Any> Many<T>.distinctUntilChanged(): Many<T> =
     Many.generate { emit ->
         var last: Any = Unset
@@ -136,6 +146,7 @@ fun <T : Any> Many<T>.distinctUntilChanged(): Many<T> =
         }
     }
 
+/** Suppresses consecutive items whose [key] projection produces the same value. */
 fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
     Many.generate { emit ->
         var lastKey: Any = Unset
@@ -151,6 +162,13 @@ fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
         }
     }
 
+/**
+ * Maps each item to a [Many] and merges the results concurrently.
+ *
+ * [concurrency] limits the number of simultaneously active inner subscriptions.
+ * Defaults to [Int.MAX_VALUE] (unbounded).  Use `concurrency = 1` for sequential
+ * processing — equivalent to [concatMap].
+ */
 fun <T : Any, R : Any> Many<T>.flatMap(
     concurrency: Int = Int.MAX_VALUE,
     transform: (T) -> Many<R>,
@@ -204,6 +222,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
     }
 }
 
+/** Maps each item to a [Many] and subscribes sequentially, preserving upstream order. */
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     flatMap(concurrency = 1, transform = transform)
 
@@ -214,6 +233,10 @@ fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
 fun <T : Any, R : Any> Many<T>.flatMapSequential(transform: (T) -> Many<R>): Many<R> =
     flatMap(concurrency = 1, transform = transform)
 
+/**
+ * Maps each item to a [Many], cancels the previous inner subscription when a new item arrives,
+ * and subscribes to the latest inner [Many].  Only the most recent inner stream is active at any time.
+ */
 fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         val channel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
@@ -297,6 +320,7 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
         }
     }
 
+/** Merges this [Many] with [other], interleaving items as they arrive. */
 fun <T : Any> Many<T>.mergeWith(other: Many<T>): Many<T> = merge(this, other)
 
 /**
@@ -320,6 +344,10 @@ fun <T : Any> Many<T>.delaySubscription(trigger: Publisher<*>): Many<T> =
         source { emit(it) }
     }
 
+/**
+ * Merges all [sources] into a single [Many], interleaving items as they arrive.
+ * Completes when all sources have completed.  Errors from any source are forwarded immediately.
+ */
 fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
     Many.generate { emit ->
         if (sources.isEmpty()) { emit(Signal.Upstream.Complete); return@generate }
@@ -364,6 +392,10 @@ fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
         }
     }
 
+/**
+ * Subscribes to [sources] one at a time in order, emitting all items from each before moving
+ * to the next.  Errors from any source terminate the sequence immediately.
+ */
 fun <T : Any> concat(vararg sources: Many<T>): Many<T> =
     Many.generate { emit ->
         for (source in sources) {
@@ -384,6 +416,10 @@ fun <T : Any> concat(vararg sources: Many<T>): Many<T> =
         emit(Signal.Upstream.Complete)
     }
 
+/**
+ * Pairs items from [a] and [b] by position, applying [transform] to each pair.
+ * Completes when the shorter source is exhausted.
+ */
 fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
     Many.generate { emit ->
         // Errors are propagated by closing each channel with a cause — RS 1.3.
@@ -445,6 +481,10 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
         }
     }
 
+/**
+ * Emits a combined value whenever either [a] or [b] emits, using the most recent value from the
+ * other source.  Does not emit until both sources have emitted at least one item.
+ */
 @Suppress("UNCHECKED_CAST")
 fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
     Many.generate { emit ->
@@ -511,6 +551,10 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
         }
     }
 
+/**
+ * Collects items into fixed-size lists of [size] and emits each list downstream.
+ * A partial list is emitted on upstream completion.
+ */
 fun <T : Any> Many<T>.buffer(size: Int): Many<List<T>> {
     require(size > 0) { "buffer size must be positive, got $size" }
     return Many.generate { emit ->
@@ -538,6 +582,12 @@ fun <T : Any> Many<T>.buffer(size: Int): Many<List<T>> {
     }
 }
 
+/**
+ * Collects items into overlapping or sliding windows of [size], advancing by [skip] items each time.
+ * - `skip == size`: non-overlapping (equivalent to [buffer]).
+ * - `skip < size`: overlapping windows.
+ * - `skip > size`: gaps between windows (some items are skipped).
+ */
 fun <T : Any> Many<T>.buffer(size: Int, skip: Int): Many<List<T>> {
     require(size > 0) { "buffer size must be positive, got $size" }
     require(skip > 0) { "buffer skip must be positive, got $skip" }
@@ -647,6 +697,15 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
     }
 }
 
+/**
+ * Groups items by [keySelector] and routes each group to [groupHandler].
+ *
+ * One sub-stream is created per distinct key.  Each sub-stream is passed to [groupHandler] which
+ * transforms it into a [Many] of results; all results are merged into the output stream.
+ *
+ * The operator owns all group subscriptions — callers cannot accidentally leave a group
+ * unsubscribed.  Cancelling the outer stream cancels all active groups.
+ */
 fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
     keySelector: (T) -> K,
     groupHandler: (key: K, group: Many<T>) -> Many<R>,
@@ -757,6 +816,7 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
         }
     }
 
+/** Invokes [action] for each item without modifying the stream. */
 fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
     Many.generate { emit ->
         source { signal ->
@@ -767,6 +827,7 @@ fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
         }
     }
 
+/** Invokes [action] when the stream completes normally, without modifying the stream. */
 fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
     Many.generate { emit ->
         source { signal ->
@@ -777,6 +838,7 @@ fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
         }
     }
 
+/** Invokes [action] when the stream signals an error, without modifying the stream. */
 fun <T : Any> Many<T>.doOnError(action: (AelvException) -> Unit): Many<T> =
     Many.generate { emit ->
         source { signal ->
@@ -787,9 +849,14 @@ fun <T : Any> Many<T>.doOnError(action: (AelvException) -> Unit): Many<T> =
         }
     }
 
+/** Invokes [action] when a subscriber subscribes to this stream, before any items are emitted. */
 fun <T : Any> Many<T>.doOnSubscribe(action: () -> Unit): Many<T> =
     Many.generate { emit -> action(); source { emit(it) } }
 
+/**
+ * Invokes [action] when the stream terminates for any reason: normal completion, error, or
+ * downstream cancellation.  The [Signal.Terminal] argument identifies which terminal was received.
+ */
 fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
     Many.generate { emit ->
         source { signal ->
@@ -803,6 +870,10 @@ fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
         }
     }
 
+/**
+ * On error, switches to the [Many] returned by [fallback], continuing from there.
+ * On normal completion, [fallback] is not invoked.
+ */
 fun <T : Any> Many<T>.recover(fallback: (AelvException) -> Many<T>): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
@@ -810,6 +881,10 @@ fun <T : Any> Many<T>.recover(fallback: (AelvException) -> Many<T>): Many<T> =
         else emit(Signal.Upstream.Complete)
     }
 
+/**
+ * On error, emits the single value returned by [fallback] and then completes.
+ * On normal completion, [fallback] is not invoked.
+ */
 fun <T : Any> Many<T>.recoverWith(fallback: (AelvException) -> T): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
@@ -822,9 +897,14 @@ fun <T : Any> Many<T>.recoverWith(fallback: (AelvException) -> T): Many<T> =
         }
     }
 
+/** Re-subscribes to the source on error, up to [times] times.  Defaults to unbounded retries. */
 fun <T : Any> Many<T>.retry(times: Long = Long.MAX_VALUE): Many<T> =
     retry(Policy.retry().maxAttempts(times))
 
+/**
+ * Re-subscribes to the source on error according to [policy].
+ * The policy controls the error filter, maximum attempt count, and backoff strategy.
+ */
 fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
     Many.generate { emit ->
         var attempts = 0L
@@ -833,8 +913,9 @@ fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
             when {
                 result is Either.Left                           -> break
                 !policy.filter((result as Either.Right).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
-                attempts >= policy.maxAttempts                  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
+                attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
+                    log.operator.retrying("retry", attempts, result.value)
                     val d = policy.backoff.delayFor(attempts)
                     if (d.isPositive()) delay(d)
                     attempts++
@@ -867,6 +948,10 @@ fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
         }
     }
 
+/**
+ * Pairs the values of [a] and [b], applying [transform] once both have emitted.
+ * If either source completes without emitting, the result completes empty.
+ */
 fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R): One<R> =
     One.generate { emit ->
         var valueA: Any = Unset
@@ -883,9 +968,11 @@ fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R
             emit(Signal.Upstream.Complete)
     }
 
+/** Pairs the value of this [One] with [other], applying [transform] to produce the result. */
 fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) -> R): One<R> =
     zip(this, other, transform)
 
+/** Transforms the value of this [One] by applying [transform] to it. */
 fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
     One.generate { emit ->
         source { signal ->
@@ -897,6 +984,7 @@ fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
         }
     }
 
+/** Passes the value of this [One] to [transform] and subscribes to the resulting [One]. */
 fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
     One.generate { emit ->
         source { signal ->
@@ -908,6 +996,7 @@ fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
         }
     }
 
+/** Passes the value of this [One] to [transform] and subscribes to the resulting [Many]. */
 fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         source { signal ->
@@ -919,6 +1008,7 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
         }
     }
 
+/** Passes the value of this [One] to [transform] and awaits the resulting [None]. */
 fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
     None.generate {
         var error: AelvException? = null
@@ -936,6 +1026,7 @@ fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
         if (error != null) throw error!!
     }
 
+/** On error, emits the value returned by [fallback] and completes normally. */
 fun <T : Any> One<T>.recover(fallback: (AelvException) -> T): One<T> =
     One.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
@@ -945,9 +1036,14 @@ fun <T : Any> One<T>.recover(fallback: (AelvException) -> T): One<T> =
         emit(Signal.Upstream.Complete)
     }
 
+/** Re-subscribes to the source on error, up to [times] times.  Defaults to unbounded retries. */
 fun <T : Any> One<T>.retry(times: Long = Long.MAX_VALUE): One<T> =
     retry(Policy.retry().maxAttempts(times))
 
+/**
+ * Re-subscribes to the source on error according to [policy].
+ * The policy controls the error filter, maximum attempt count, and backoff strategy.
+ */
 fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
     One.generate { emit ->
         var attempts = 0L
@@ -956,8 +1052,9 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
             when {
                 result is Either.Left                           -> break
                 !policy.filter((result as Either.Right).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
-                attempts >= policy.maxAttempts                  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
+                attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
+                    log.operator.retrying("retry", attempts, result.value)
                     val d = policy.backoff.delayFor(attempts)
                     if (d.isPositive()) delay(d)
                     attempts++
@@ -967,6 +1064,7 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
         emit(Signal.Upstream.Complete)
     }
 
+/** Invokes [action] for the emitted value without modifying the stream. */
 fun <T : Any> One<T>.doOnNext(action: (T) -> Unit): One<T> =
     One.generate { emit ->
         source { signal ->
@@ -977,6 +1075,7 @@ fun <T : Any> One<T>.doOnNext(action: (T) -> Unit): One<T> =
         }
     }
 
+/** Invokes [action] when the stream signals an error, without modifying the stream. */
 fun <T : Any> One<T>.doOnError(action: (AelvException) -> Unit): One<T> =
     One.generate { emit ->
         source { signal ->
@@ -987,6 +1086,10 @@ fun <T : Any> One<T>.doOnError(action: (AelvException) -> Unit): One<T> =
         }
     }
 
+/**
+ * Invokes [action] when the stream terminates for any reason: normal completion, error, or
+ * downstream cancellation.
+ */
 fun <T : Any> One<T>.doFinally(action: (Signal.Terminal) -> Unit): One<T> =
     One.generate { emit ->
         source { signal ->
@@ -1020,6 +1123,12 @@ fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
         }
     }
 
+/**
+ * Suspends until this [One] emits its value or signals an error.
+ *
+ * Returns [Either.Left] containing the value on success, or [Either.Right] containing the
+ * [AelvException] if the source errored or completed without emitting.
+ */
 suspend fun <T : Any> One<T>.get(): Either<T, AelvException> {
     var result: Any = Unset
     val outcome = collect { value ->

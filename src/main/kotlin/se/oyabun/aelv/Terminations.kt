@@ -2,12 +2,28 @@ package se.oyabun.aelv
 
 import org.reactivestreams.Subscription
 
+/**
+ * A handle returned by [subscribe] and [drain] that allows cancelling an active subscription.
+ */
 interface Disposable {
+    /** Cancels the subscription, stopping item delivery. */
     fun cancel()
 }
 
 private val log = Logging.of<Disposable>()
 
+/**
+ * Subscribes to this [Many] with backpressure replenishment.
+ *
+ * Requests [prefetch] items upfront, then re-requests `prefetch / 2` items each time that
+ * threshold is consumed — keeping the pipeline full without unbounded buffering.
+ *
+ * @param prefetch Initial demand and replenishment batch size.  Must be positive.
+ * @param onNext   Called for each item.
+ * @param onError  Called on error.  Exceptions thrown by this callback are logged and swallowed.
+ * @param onComplete Called on normal completion.
+ * @return A [Disposable] that can be used to cancel the subscription.
+ */
 fun <T : Any> Many<T>.subscribe(
     prefetch: Long,
     onNext: (T) -> Unit,
@@ -49,6 +65,16 @@ fun <T : Any> Many<T>.subscribe(
     }
 }
 
+/**
+ * Subscribes to this [Many] with unbounded demand — equivalent to `subscribe(Long.MAX_VALUE, ...)`.
+ *
+ * Use only when the source is known to be bounded or when backpressure is handled upstream.
+ *
+ * @param onNext     Called for each item.
+ * @param onError    Called on error.
+ * @param onComplete Called on normal completion.
+ * @return A [Disposable] that can be used to cancel the subscription.
+ */
 fun <T : Any> Many<T>.drain(
     onNext: (T) -> Unit,
     onError: (AelvException) -> Unit,
@@ -60,6 +86,10 @@ fun <T : Any> Many<T>.drain(
     onComplete = onComplete,
 )
 
+/**
+ * Accumulates all items into a single result by applying [accumulate] from [initial].
+ * Returns a [One] that emits the final accumulated value.
+ */
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R> =
     One.generate { emit ->
         var acc = initial
@@ -73,6 +103,12 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
         }
     }
 
+/**
+ * Reduces all items to a single value by applying [accumulate] pairwise.
+ *
+ * Returns a [One] that emits `Either.Left<T>` on success, or `Either.Right<AelvException>`
+ * if the stream was empty or errored.
+ */
 fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvException>> =
     One.generate { emit ->
         var acc: Any = Unset
@@ -93,10 +129,18 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvExcepti
         emit(Signal.Upstream.Complete)
     }
 
+/** Collects all items into an immutable [List]. */
 fun <T : Any> Many<T>.toList(): One<List<T>> = fold(emptyList()) { acc, item -> acc + item }
 
+/** Collects all items into an immutable [Set], removing duplicates. */
 fun <T : Any> Many<T>.toSet(): One<Set<T>> = fold(emptySet()) { acc, item -> acc + item }
 
+/**
+ * Suspends until the first item is emitted, then cancels the subscription.
+ *
+ * Returns [Either.Left] with the first item, or [Either.Right] with a [NoSuchElementException]
+ * if the stream was empty, or with the upstream error if the stream errored.
+ */
 suspend fun <T : Any> Many<T>.first(): Either<T, AelvException> {
     var result: Any = Unset
     val outcome = collect { value ->
@@ -113,6 +157,12 @@ suspend fun <T : Any> Many<T>.first(): Either<T, AelvException> {
     }
 }
 
+/**
+ * Suspends until the stream completes, then returns the last emitted item.
+ *
+ * Returns [Either.Left] with the last item, or [Either.Right] with a [NoSuchElementException]
+ * if the stream was empty, or with the upstream error if the stream errored.
+ */
 suspend fun <T : Any> Many<T>.last(): Either<T, AelvException> {
     var result: Any = Unset
     val outcome = collect { value ->
