@@ -609,9 +609,12 @@ class OperatorsTest {
     class TakeUntilOther {
 
         @Test
-        fun `takeUntilOther stops when other signals`() = runTest {
-            val result = Many.interval(10.milliseconds).takeUntilOther(Many.of(Unit)).toList().get()
-            assertIs<Either.Left<List<Long>>>(result)
+        fun `takeUntilOther stops when other signals`() {
+            val source = Sink.broadcast<Int>()
+            val other  = Sink.broadcast<Unit>()
+            Verify.that(source.asMany().takeUntilOther(other.asMany()))
+                .runs { other.complete() }
+                .completesNormally()
         }
 
         @Test
