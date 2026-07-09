@@ -87,7 +87,7 @@ val javadocJar = tasks.register<Jar>("javadocJar") {
 if (isPublishable && signingKey != null) {
     signing {
         useInMemoryPgpKeys(signingKey, signingPassword)
-        sign(publishing.publications["maven"])
+        sign(publishing.publications)
     }
 }
 
