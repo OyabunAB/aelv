@@ -6,8 +6,14 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration
+import org.reactivestreams.Publisher
 
 fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> =
     Many.generate { emit ->
@@ -201,6 +207,13 @@ fun <T : Any, R : Any> Many<T>.flatMap(
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     flatMap(concurrency = 1, transform = transform)
 
+/**
+ * Maps each item to a [Many] and subscribes to them one at a time, preserving upstream order.
+ * Equivalent to [concatMap] — an alias that documents the ordering guarantee explicitly.
+ */
+fun <T : Any, R : Any> Many<T>.flatMapSequential(transform: (T) -> Many<R>): Many<R> =
+    flatMap(concurrency = 1, transform = transform)
+
 fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         val channel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
@@ -246,7 +259,66 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
         }
     }
 
+/**
+ * Emits items from this [Many] until [other] emits any signal (Next, Complete, or Error),
+ * at which point the subscription to this source is cancelled and the stream completes.
+ */
+fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
+    Many.generate { emit ->
+        val channel = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
+        coroutineScope {
+            // Control publisher — first signal stops the main source.
+            val controlJob = launch {
+                Many.from(other).source { signal ->
+                    when (signal) {
+                        is Signal.Upstream.Next, is Signal.Upstream.Complete, is Signal.Upstream.Error ->
+                            channel.send(Signal.Upstream.Complete)
+                    }
+                    Signal.Downstream.Cancel
+                }
+            }
+            val producerJob = launch {
+                source { signal ->
+                    channel.send(signal)
+                    when (signal) {
+                        is Signal.Upstream.Complete, is Signal.Upstream.Error -> Signal.Downstream.Cancel
+                        else -> Signal.Downstream.Request(1)
+                    }
+                }
+                channel.close()
+            }
+            for (signal in channel) {
+                when (signal) {
+                    is Signal.Upstream.Next     -> if (emit(signal) == Signal.Downstream.Cancel) { producerJob.cancel(); controlJob.cancel(); break }
+                    is Signal.Upstream.Complete -> { producerJob.cancel(); controlJob.cancel(); emit(Signal.Upstream.Complete); break }
+                    is Signal.Upstream.Error    -> { producerJob.cancel(); controlJob.cancel(); emit(signal); break }
+                }
+            }
+        }
+    }
+
 fun <T : Any> Many<T>.mergeWith(other: Many<T>): Many<T> = merge(this, other)
+
+/**
+ * Delays subscription to this [Many] until the [trigger] publisher emits an item or completes.
+ * The trigger's first signal starts the subscription; the trigger itself is then cancelled.
+ * If the trigger errors, the error is forwarded and this source is never subscribed.
+ */
+fun <T : Any> Many<T>.delaySubscription(trigger: Publisher<*>): Many<T> =
+    Many.generate { emit ->
+        var triggerError: AelvException? = null
+        Many.from(trigger).source { signal ->
+            when (signal) {
+                is Signal.Upstream.Error -> { triggerError = signal.cause; Signal.Downstream.Cancel }
+                else                     -> Signal.Downstream.Cancel
+            }
+        }
+        if (triggerError != null) {
+            emit(Signal.Upstream.Error(triggerError!!))
+            return@generate
+        }
+        source { emit(it) }
+    }
 
 fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
     Many.generate { emit ->
@@ -501,6 +573,80 @@ fun <T : Any> Many<T>.buffer(size: Int, skip: Int): Many<List<T>> {
     }
 }
 
+/**
+ * Collects items into a list and emits it when either [size] items have accumulated or [timeout]
+ * elapses since the first item entered the current bucket — whichever comes first.
+ * An incomplete bucket is emitted on upstream Complete.
+ */
+fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>> {
+    require(size > 0) { "buffer size must be positive, got $size" }
+    require(timeout.isPositive()) { "timeout must be positive, got $timeout" }
+    return Many.generate { emit ->
+        // Merged event channel: Left = source signal, Right = timer tick sentinel.
+        val events = Channel<Either<Signal.Upstream<T>, Unit>>(Channel.BUFFERED)
+        coroutineScope {
+            val producerJob = launch {
+                source { signal ->
+                    events.send(signal.left())
+                    when (signal) {
+                        is Signal.Upstream.Complete, is Signal.Upstream.Error -> Signal.Downstream.Cancel
+                        else -> Signal.Downstream.Request(1)
+                    }
+                }
+                events.close()
+            }
+            val bucket = mutableListOf<T>()
+            var timerJob: Job? = null
+
+            fun resetTimer() {
+                timerJob?.cancel()
+                timerJob = launch { delay(timeout); events.trySend(Unit.right()) }
+            }
+
+            suspend fun flushBucket(): Boolean {
+                if (bucket.isEmpty()) return true
+                val downstream = emit(Signal.Upstream.Next(bucket.toList()))
+                bucket.clear()
+                timerJob?.cancel()
+                timerJob = null
+                return downstream != Signal.Downstream.Cancel
+            }
+
+            var terminated = false
+            for (event in events) {
+                when (event) {
+                    is Either.Right -> {
+                        // Timer fired — flush current bucket.
+                        if (!flushBucket()) { producerJob.cancel(); terminated = true; break }
+                    }
+                    is Either.Left -> when (val signal = event.value) {
+                        is Signal.Upstream.Next -> {
+                            if (bucket.isEmpty()) resetTimer()
+                            bucket.add(signal.value)
+                            if (bucket.size >= size) {
+                                if (!flushBucket()) { producerJob.cancel(); terminated = true; break }
+                            }
+                        }
+                        is Signal.Upstream.Complete -> {
+                            timerJob?.cancel()
+                            flushBucket()
+                            break
+                        }
+                        is Signal.Upstream.Error -> {
+                            timerJob?.cancel()
+                            emit(Signal.Upstream.Error(signal.cause))
+                            terminated = true
+                            break
+                        }
+                    }
+                }
+            }
+            timerJob?.cancel()
+            if (!terminated) emit(Signal.Upstream.Complete)
+        }
+    }
+}
+
 fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
     keySelector: (T) -> K,
     groupHandler: (key: K, group: Many<T>) -> Many<R>,
@@ -572,6 +718,44 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
         if (!terminated) emit(Signal.Upstream.Complete)
     }
 }
+
+/**
+ * Drops upstream items that arrive when the downstream has no pending demand.
+ *
+ * Use this only when data loss is acceptable — e.g. high-frequency sensor readings where
+ * only the latest values matter.
+ */
+fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
+    Many.generate { emit ->
+        val channel = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
+        coroutineScope {
+            val producerJob = launch {
+                source { signal ->
+                    // Non-blocking offer: drop if the channel buffer is full.
+                    if (!channel.trySend(signal).isSuccess) {
+                        // Drop the item; still need to propagate terminals.
+                        when (signal) {
+                            is Signal.Upstream.Complete -> channel.send(signal)  // must not lose Complete
+                            is Signal.Upstream.Error    -> channel.send(signal)  // must not lose Error
+                            else -> { /* item dropped */ }
+                        }
+                    }
+                    when (signal) {
+                        is Signal.Upstream.Complete, is Signal.Upstream.Error -> Signal.Downstream.Cancel
+                        else -> Signal.Downstream.Request(1)
+                    }
+                }
+                channel.close()
+            }
+            for (signal in channel) {
+                when (signal) {
+                    is Signal.Upstream.Next     -> if (emit(signal) == Signal.Downstream.Cancel) { producerJob.cancel(); break }
+                    is Signal.Upstream.Complete -> { emit(Signal.Upstream.Complete); break }
+                    is Signal.Upstream.Error    -> { producerJob.cancel(); emit(signal); break }
+                }
+            }
+        }
+    }
 
 fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
     Many.generate { emit ->
@@ -659,6 +843,48 @@ fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
         }
         emit(Signal.Upstream.Complete)
     }
+
+/**
+ * Switches the dispatcher on which downstream [emit] calls execute.
+ * The source continues running on whatever dispatcher it was already using;
+ * only the hand-off to the subscriber is moved to [context].
+ */
+fun <T : Any> Many<T>.publishOn(context: CoroutineContext): Many<T> =
+    Many.generate { emit ->
+        source { signal ->
+            withContext(context) { emit(signal) }
+        }
+    }
+
+/**
+ * Switches the dispatcher on which the source lambda executes.
+ * Item production runs on [context]; the emit calls themselves remain on the caller's dispatcher.
+ */
+fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
+    Many.generate { emit ->
+        withContext(context) {
+            source { emit(it) }
+        }
+    }
+
+fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R): One<R> =
+    One.generate { emit ->
+        var valueA: Any = Unset
+        var valueB: Any = Unset
+        var error: AelvException? = null
+        a.collect { v -> valueA = v; Signal.Downstream.Cancel }
+        if (valueA === Unset) { emit(Signal.Upstream.Complete); return@generate }
+        b.collect { v -> valueB = v; Signal.Downstream.Cancel }
+        if (error != null) { emit(Signal.Upstream.Error(error!!)); return@generate }
+        if (valueB === Unset) { emit(Signal.Upstream.Complete); return@generate }
+        @Suppress("UNCHECKED_CAST")
+        val r = transform(valueA as A, valueB as B)
+        if (emit(Signal.Upstream.Next(r)) != Signal.Downstream.Cancel)
+            emit(Signal.Upstream.Complete)
+    }
+
+fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) -> R): One<R> =
+    zip(this, other, transform)
 
 fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
     One.generate { emit ->
@@ -774,6 +1000,26 @@ fun <T : Any> One<T>.doFinally(action: (Signal.Terminal) -> Unit): One<T> =
         }
     }
 
+/**
+ * [One] variant of [publishOn].
+ */
+fun <T : Any> One<T>.publishOn(context: CoroutineContext): One<T> =
+    One.generate { emit ->
+        source { signal ->
+            withContext(context) { emit(signal) }
+        }
+    }
+
+/**
+ * [One] variant of [subscribeOn].
+ */
+fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
+    One.generate { emit ->
+        withContext(context) {
+            source { emit(it) }
+        }
+    }
+
 suspend fun <T : Any> One<T>.get(): Either<T, AelvException> {
     var result: Any = Unset
     val outcome = collect { value ->
@@ -787,5 +1033,34 @@ suspend fun <T : Any> One<T>.get(): Either<T, AelvException> {
         }
         outcome is Either.Right -> outcome
         else                    -> NoSuchElementException().right()
+    }
+}
+
+/**
+ * Returns a [One] that executes the upstream source at most once and replays the result to every
+ * subscriber.  The first subscriber triggers execution; subsequent subscribers receive the cached
+ * result immediately without re-executing the source.
+ *
+ * Thread-safe: a [Mutex] ensures only one subscriber runs the source even under concurrent
+ * subscriptions.
+ */
+fun <T : Any> One<T>.cache(): One<T> {
+    val mutex  = Mutex()
+    var cached: Either<T, AelvException>? = null
+    return One.generate { emit ->
+        val result: Either<T, AelvException> = mutex.withLock {
+            cached ?: run {
+                val r = get()
+                cached = r
+                r
+            }
+        }
+        when (result) {
+            is Either.Left  -> {
+                if (emit(Signal.Upstream.Next(result.value)) != Signal.Downstream.Cancel)
+                    emit(Signal.Upstream.Complete)
+            }
+            is Either.Right -> emit(Signal.Upstream.Error(result.value))
+        }
     }
 }

@@ -7,9 +7,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.reactive.asFlow as publisherAsFlow
+import kotlin.time.Duration
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 
@@ -100,6 +102,19 @@ class Many<T : Any> private constructor(
         }
 
         fun <T : Any> never(): Many<T> = Many { awaitCancellation() }
+
+        /**
+         * Emits an ever-increasing [Long] tick (0, 1, 2, …) every [period], starting after the
+         * first period elapses.  Respects downstream demand: if the subscriber is slower than the
+         * tick rate, emission suspends until demand arrives.
+         */
+        fun interval(period: Duration): Many<Long> = Many { emit ->
+            var tick = 0L
+            while (true) {
+                delay(period)
+                if (emit(Signal.Upstream.Next(tick++)) == Signal.Downstream.Cancel) return@Many
+            }
+        }
     }
 }
 
@@ -203,7 +218,7 @@ class None<T : Any> private constructor(
         }
     }
 
-    internal suspend fun await(): Either<Unit, AelvException> = try {
+    suspend fun await(): Either<Unit, AelvException> = try {
         source()
         Unit.left()
     } catch (e: AelvException) {
