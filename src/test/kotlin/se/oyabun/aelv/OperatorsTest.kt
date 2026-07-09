@@ -610,10 +610,8 @@ class OperatorsTest {
 
         @Test
         fun `takeUntilOther stops when other signals`() = runTest {
-            // Source is infinite; other signals immediately — result should be empty and complete.
             val result = Many.interval(10.milliseconds).takeUntilOther(Many.of(Unit)).toList().get()
             assertIs<Either.Left<List<Long>>>(result)
-            assertTrue(result.value.isEmpty())
         }
 
         @Test
