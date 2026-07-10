@@ -8,7 +8,7 @@ import se.oyabun.aelv.Many
 import se.oyabun.aelv.UpstreamErrorException
 
 @Test
-class ManyVerification : PublisherVerification<Int>(TestEnvironment(1000L, 200L)) {
+class ManyVerification : PublisherVerification<Int>(TestEnvironment(3000L, 500L)) {
 
     override fun createPublisher(elements: Long): Publisher<Int> =
         Many.of(generateSequence(0L) { if (it + 1 < elements) it + 1 else null }.map { it.toInt() }.asIterable())

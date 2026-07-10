@@ -32,6 +32,12 @@ internal class StreamSubscription<T : Any>(
     private val log  = Logging.of<StreamSubscription<*>>()
     private val name = subscriber::class.simpleName ?: "Subscriber"
 
+    private val subscriptionExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "aelv-${name.lowercase()}").also { it.isDaemon = true }
+    }
+    private val subscriptionDispatcher = subscriptionExecutor.asCoroutineDispatcher()
+    private val subscriptionScope = CoroutineScope(subscriptionDispatcher + SupervisorJob())
+
     private val demand     = AtomicLong(0L)
     private val signal     = Channel<Unit>(Channel.UNLIMITED)
     private val terminated = AtomicBoolean(false)
@@ -40,7 +46,7 @@ internal class StreamSubscription<T : Any>(
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = sharedScope.launch {
+        val job = subscriptionScope.launch {
             try {
                 source(
                     { value ->
@@ -82,6 +88,8 @@ internal class StreamSubscription<T : Any>(
 
     private fun shutdown() {
         signal.close()
+        subscriptionDispatcher.close()
+        subscriptionExecutor.shutdown()
     }
 
     override fun request(n: Long) {
@@ -129,12 +137,18 @@ internal class CompletionSubscription(
     private val log  = Logging.of<CompletionSubscription>()
     private val name = subscriber::class.simpleName ?: "Subscriber"
 
+    private val subscriptionExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "aelv-${name.lowercase()}").also { it.isDaemon = true }
+    }
+    private val subscriptionDispatcher = subscriptionExecutor.asCoroutineDispatcher()
+    private val subscriptionScope = CoroutineScope(subscriptionDispatcher + SupervisorJob())
+
     private val terminated = AtomicBoolean(false)
     private val producer   = AtomicReference<Job?>(null)
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = sharedScope.launch {
+        val job = subscriptionScope.launch {
             try {
                 source()
                 if (terminated.compareAndSet(false, true)) {
@@ -148,6 +162,9 @@ internal class CompletionSubscription(
                     log.stream.error(name, e)
                     subscriber.onError(e)
                 }
+            } finally {
+                subscriptionDispatcher.close()
+                subscriptionExecutor.shutdown()
             }
         }
         if (!producer.compareAndSet(null, job)) job.cancel()
@@ -158,6 +175,8 @@ internal class CompletionSubscription(
             if (terminated.compareAndSet(false, true)) {
                 producer.get()?.cancel()
                 subscriber.onError(InvalidDemandException(n))
+                subscriptionDispatcher.close()
+                subscriptionExecutor.shutdown()
             }
             return
         }
@@ -169,6 +188,8 @@ internal class CompletionSubscription(
         if (terminated.compareAndSet(false, true)) {
             log.stream.cancelled(name)
             producer.get()?.cancel()
+            subscriptionDispatcher.close()
+            subscriptionExecutor.shutdown()
         }
     }
 }
