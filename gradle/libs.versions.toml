@@ -1,16 +1,16 @@
 [versions]
 kotlin            = "2.4.0"
 jvm               = "21"
-coroutines        = "1.10.2"
+coroutines        = "1.11.0"
 reactive_streams  = "1.0.4"
 slf4j             = "2.0.18"
 logback           = "1.5.18"
 testng            = "7.11.0"
 dokka             = "2.2.0"
 jmh               = "1.37"
-reactor           = "3.7.6"
-rxjava            = "3.1.10"
-mutiny            = "2.8.0"
+reactor           = "3.8.6"
+rxjava            = "3.1.12"
+mutiny            = "3.3.0"
 
 [libraries]
 reactive_streams     = { group = "org.reactivestreams",      name = "reactive-streams",            version.ref = "reactive_streams" }
