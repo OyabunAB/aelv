@@ -34,3 +34,4 @@ build/
 STATE.md
 jmh-result*
 se.oyabun.aelv.benchmarks.*/
+.idea/
