@@ -26,19 +26,11 @@ dependencies {
 Three publisher types, each cold and backpressure-aware:
 
 ```mermaid
-classDiagram
-    class Many["Many~T~"] {
-        0..N items
-    }
-    class One["One~T~"] {
-        exactly 1 item
-    }
-    class None["None~T~"] {
-        0 items — side-effect only
-    }
-    Many --|> Publisher
-    One  --|> Publisher
-    None --|> Publisher
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
+flowchart LR
+    Many["Many&lt;T&gt; — 0..N"] --> P[Publisher]
+    One["One&lt;T&gt; — exactly 1"] --> P
+    None["None&lt;T&gt; — side-effect"] --> P
 ```
 
 ```kotlin
@@ -52,19 +44,11 @@ val effect: None<Unit> = None.defer { db.commit() }
 Every interaction between producer and consumer flows through `Signal`:
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart LR
-    subgraph Upstream
-        N[Next~T~]
-        C[Complete]
-        E[Error]
-    end
-    subgraph Downstream
-        R[Request~n~]
-        X[Cancel]
-    end
-    N --> R
-    C --> X
-    E --> X
+    N[Next] --> R[Request n]
+    C[Complete] --> X[Cancel]
+    E[Error] --> X
     N --> X
 ```
 
@@ -86,7 +70,20 @@ flowchart LR
 
 ### One
 
-`map` `flatMap` `flatMapMany` `flatMapNone` `zipWith` `recover` `retry` `doOnNext` `doOnError` `doFinally` `publishOn` `subscribeOn` `get` `cache`
+| Category | Operators |
+|---|---|
+| Transform | `map` `flatMap` `flatMapMany` `flatMapNone` |
+| Combine | `zipWith` |
+| Side-effect | `doOnNext` `doOnError` `doFinally` |
+| Error | `recover` `retry(n)` `retry(Policy)` |
+| Context | `publishOn` `subscribeOn` |
+| Terminal | `get` `cache` |
+
+### None
+
+| Category | Operators |
+|---|---|
+| Terminal | `await` |
 
 ### zip
 
@@ -99,14 +96,12 @@ zip(One.of(1), One.of("a")) { n, s -> "$n$s" }  // One<String> → "1a"
 Hot multicast push source. Three variants:
 
 ```mermaid
-flowchart TD
-    E[emit / complete / error] --> S{Sink}
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
+flowchart LR
+    E[emit/complete/error] --> S{Sink}
     S -->|broadcast| A[no history]
     S -->|replay| B[full history]
-    S -->|replayLast n| C[last n items]
-    A --> sub1[subscriber]
-    B --> sub2[late subscriber gets all]
-    C --> sub3[late subscriber gets last n]
+    S -->|replayLast n| C[last n]
 ```
 
 ```kotlin
