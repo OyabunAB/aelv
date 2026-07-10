@@ -1,7 +1,7 @@
 [versions]
 kotlin            = "2.4.0"
 jvm               = "21"
-coroutines        = "1.10.2"
+coroutines        = "1.11.0"
 reactive_streams  = "1.0.4"
 slf4j             = "2.0.18"
 logback           = "1.5.18"
