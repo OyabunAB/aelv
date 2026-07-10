@@ -31,10 +31,10 @@ sealed interface Signal {
 
     /** Signals flowing from subscriber to publisher. */
     sealed interface Downstream : Signal {
-        /** Requests [n] additional items from the publisher (RS spec §3.9: `n` must be positive). */
-        data class  Request(val n: Long) : Downstream
+        /** Requests the next item from the publisher. */
+        data object Request : Downstream
         /** Tells the publisher to stop sending items and release any resources. */
-        data object Cancel               : Downstream, Terminal
+        data object Cancel  : Downstream, Terminal
     }
 
     /** Supertype of [Upstream.Complete], [Upstream.Error], and [Downstream.Cancel]. */

@@ -1,0 +1,140 @@
+package se.oyabun.aelv.benchmarks
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.openjdk.jmh.annotations.Benchmark
+import org.openjdk.jmh.annotations.BenchmarkMode
+import org.openjdk.jmh.annotations.Fork
+import org.openjdk.jmh.annotations.Measurement
+import org.openjdk.jmh.annotations.Mode
+import org.openjdk.jmh.annotations.Param
+import org.openjdk.jmh.annotations.State
+import org.openjdk.jmh.annotations.Scope as JmhScope
+import org.openjdk.jmh.annotations.Warmup
+import se.oyabun.aelv.Many
+import se.oyabun.aelv.One
+import se.oyabun.aelv.Sinks
+import se.oyabun.aelv.concatMap
+import se.oyabun.aelv.filter
+import se.oyabun.aelv.flatMap
+import se.oyabun.aelv.flatMapMany
+import se.oyabun.aelv.fold
+import se.oyabun.aelv.get
+import se.oyabun.aelv.map
+import se.oyabun.aelv.take
+import se.oyabun.aelv.toList
+
+@BenchmarkMode(Mode.Throughput)
+@State(JmhScope.Thread)
+@Warmup(iterations = 3)
+@Measurement(iterations = 5)
+@Fork(1)
+open class AelvBenchmark {
+
+    @Param("1000", "10000")
+    var size: Int = 1000
+
+    private val scope = CoroutineScope(SupervisorJob())
+
+    private fun <T> run(block: suspend () -> T): T = runBlocking { block() }
+
+    @Benchmark
+    fun many_baseline_toList(): Int =
+        run { Many.range(0, size).toList().get() }.leftOrThrow().size
+
+    @Benchmark
+    fun many_map_toList(): Int =
+        run { Many.range(0, size).map { it * 2 }.toList().get() }.leftOrThrow().size
+
+    @Benchmark
+    fun many_filter_toList(): Int =
+        run { Many.range(0, size).filter { it % 2 == 0 }.toList().get() }.leftOrThrow().size
+
+    @Benchmark
+    fun many_take_toList(): Int =
+        run { Many.range(0, size).take(size.toLong() / 2).toList().get() }.leftOrThrow().size
+
+    @Benchmark
+    fun many_chain_map_filter_take(): Int =
+        run {
+            Many.range(0, size)
+                .map { it * 2 }
+                .filter { it % 4 == 0 }
+                .take(size.toLong() / 4)
+                .toList().get()
+        }.leftOrThrow().size
+
+    @Benchmark
+    fun many_concatMap_toList(): Int =
+        run {
+            Many.range(0, size / 10)
+                .concatMap { i -> Many.just(i, i + 1, i + 2) }
+                .toList().get()
+        }.leftOrThrow().size
+
+    @Benchmark
+    fun many_flatMap_sequential_toList(): Int =
+        run {
+            Many.range(0, size / 10)
+                .flatMap(concurrency = 1) { i -> Many.just(i, i + 1, i + 2) }
+                .toList().get()
+        }.leftOrThrow().size
+
+    @Benchmark
+    fun many_flatMap_concurrent_toList(): Int =
+        run {
+            Many.range(0, size / 10)
+                .flatMap(concurrency = 256) { i -> Many.just(i, i + 1, i + 2) }
+                .toList().get()
+        }.leftOrThrow().size
+
+    @Benchmark
+    fun many_fold_sum(): Long =
+        run {
+            Many.range(0, size)
+                .fold(0L) { acc, i -> acc + i }
+                .get()
+        }.leftOrThrow()
+
+    @Benchmark
+    fun one_baseline_get(): Int =
+        run { One.of(42).get() }.leftOrThrow()
+
+    @Benchmark
+    fun one_map_get(): Int =
+        run { One.of(42).map { it * 2 }.get() }.leftOrThrow()
+
+    @Benchmark
+    fun one_flatMapMany_toList(): Int =
+        run {
+            One.of(size)
+                .flatMapMany { n -> Many.range(0, n) }
+                .toList().get()
+        }.leftOrThrow().size
+
+    @Benchmark
+    fun sink_broadcast_single_subscriber(): Int {
+        val sink = Sinks.broadcast<Int>()
+        return run {
+            val job = scope.launch { sink.asMany().toList().get() }
+            repeat(size) { sink.emit(it) }
+            sink.complete()
+            job.join()
+            size
+        }
+    }
+
+    @Benchmark
+    fun sink_broadcast_four_subscribers(): Int {
+        val sink = Sinks.broadcast<Int>()
+        return run {
+            val jobs = List(4) { scope.launch { sink.asMany().toList().get() } }
+            repeat(size) { sink.emit(it) }
+            sink.complete()
+            jobs.forEach { it.join() }
+            size
+        }
+    }
+}

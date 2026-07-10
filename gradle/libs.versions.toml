@@ -7,6 +7,10 @@ slf4j             = "2.0.18"
 logback           = "1.5.18"
 testng            = "7.11.0"
 dokka             = "2.2.0"
+jmh               = "1.37"
+reactor           = "3.7.6"
+rxjava            = "3.1.10"
+mutiny            = "2.8.0"
 
 [libraries]
 reactive_streams     = { group = "org.reactivestreams",      name = "reactive-streams",            version.ref = "reactive_streams" }
@@ -19,6 +23,18 @@ logback_classic      = { group = "ch.qos.logback",           name = "logback-cla
 kotlin_test          = { group = "org.jetbrains.kotlin",     name = "kotlin-test",                 version.ref = "kotlin" }
 kotlin_test_junit5   = { group = "org.jetbrains.kotlin",     name = "kotlin-test-junit5",          version.ref = "kotlin" }
 testng               = { group = "org.testng",               name = "testng",                      version.ref = "testng" }
+jmh_core             = { group = "org.openjdk.jmh",          name = "jmh-core",                    version.ref = "jmh" }
+jmh_generator_annprocess = { group = "org.openjdk.jmh",     name = "jmh-generator-annprocess",    version.ref = "jmh" }
+reactor_core         = { group = "io.projectreactor",        name = "reactor-core",                version.ref = "reactor" }
+rxjava               = { group = "io.reactivex.rxjava3",     name = "rxjava",                      version.ref = "rxjava" }
+mutiny               = { group = "io.smallrye.reactive",     name = "mutiny",                      version.ref = "mutiny" }
+
+[bundles]
+jmh_benchmarks       = ["jmh_core", "reactor_core", "rxjava", "mutiny", "coroutines_core"]
+tck                  = ["reactive_streams_tck", "testng", "logback_classic"]
+test                 = ["kotlin_test", "kotlin_test_junit5", "coroutines_test", "logback_classic"]
+core_api             = ["reactive_streams"]
+core                 = ["coroutines_core", "coroutines_reactive", "slf4j_api"]
 
 [plugins]
 kotlin_jvm     = { id = "org.jetbrains.kotlin.jvm",              version.ref = "kotlin" }
@@ -26,3 +42,4 @@ mavenPublish   = { id = "maven-publish" }
 signing        = { id = "signing" }
 dokka          = { id = "org.jetbrains.dokka",                   version.ref = "dokka" }
 nexusPublish   = { id = "io.github.gradle-nexus.publish-plugin", version = "2.0.0" }
+jmh            = { id = "me.champeau.jmh",                       version = "0.7.3" }

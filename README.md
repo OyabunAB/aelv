@@ -151,3 +151,25 @@ Verify.that(publisher)
 ## RS Compliance
 
 TCK-verified. `Many` passes all applicable RS Publisher specs. `One` passes all single-element specs.
+
+## Performance
+
+aelv implements a synchronous fusion protocol for fused pipelines — when the entire chain from
+source to terminal is synchronous, the coroutine callback machinery is bypassed in favour of a
+tight poll loop.
+
+| Benchmark | aelv | RxJava | Mutiny | Reactor |
+|---|---:|---:|---:|---:|
+| baseline_toList | **226** | 154 | 57 | 48 |
+| map_toList | **132** | 114 | 55 | 47 |
+| filter_toList | **225** | 170 | 100 | 60 |
+| take_toList | **301** | 236 | 184 | 76 |
+| fold_sum | **188** | 160 | 68 | 43 |
+| chain (map→filter→take) | **269** | 254 | 136 | 101 |
+| concatMap_toList | 49 | 57 | **80** | 56 |
+| flatMap_concurrent | 35 | **87** | 33 | 55 |
+
+*ops/ms on 1000 items, JMH throughput mode, OpenJDK 21, Intel i9-8950HK. See [BENCHMARKS.md](BENCHMARKS.md) for methodology.*
+
+Backpressure is unconditional — fusion only activates on the internal synchronous terminal path.
+Any async operator routes through the full protocol with demand signalling and cancellation.

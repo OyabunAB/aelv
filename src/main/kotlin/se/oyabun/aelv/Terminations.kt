@@ -92,13 +92,14 @@ fun <T : Any> Many<T>.drain(
  */
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R> =
     One.generate { emit ->
-        var acc = initial
-        val result = collect { value ->
-            acc = accumulate(acc, value)
-            Signal.Downstream.Request(1)
+        val fused = collectInto(initial, accumulate)
+        val result = fused ?: run {
+            var acc = initial
+            collect { value -> acc = accumulate(acc, value); Signal.Downstream.Request }
+                .mapLeft { acc }
         }
         when (result) {
-            is Either.Left  -> { emit(Signal.Upstream.Next(acc)); emit(Signal.Upstream.Complete) }
+            is Either.Left  -> { emit(Signal.Upstream.Next(result.value)); emit(Signal.Upstream.Complete) }
             is Either.Right -> emit(Signal.Upstream.Error(result.value))
         }
     }
@@ -115,7 +116,7 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvExcepti
         val result = collect { item ->
             @Suppress("UNCHECKED_CAST")
             acc = if (acc === Unset) item else accumulate(acc as T, item)
-            Signal.Downstream.Request(1)
+            Signal.Downstream.Request
         }
         val value: Either<T, AelvException> = when {
             result is Either.Right -> result
@@ -130,10 +131,32 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvExcepti
     }
 
 /** Collects all items into an immutable [List]. */
-fun <T : Any> Many<T>.toList(): One<List<T>> = fold(emptyList()) { acc, item -> acc + item }
+fun <T : Any> Many<T>.toList(): One<List<T>> =
+    One.generate { emit ->
+        val fused = collectInto(mutableListOf<T>()) { acc, item -> acc.also { it.add(item) } }
+        val outcome = fused ?: run {
+            val result = mutableListOf<T>()
+            collect { value -> result.add(value); Signal.Downstream.Request }.mapLeft { result }
+        }
+        when (outcome) {
+            is Either.Left  -> { emit(Signal.Upstream.Next(outcome.value as List<T>)); emit(Signal.Upstream.Complete) }
+            is Either.Right -> emit(Signal.Upstream.Error(outcome.value))
+        }
+    }
 
 /** Collects all items into an immutable [Set], removing duplicates. */
-fun <T : Any> Many<T>.toSet(): One<Set<T>> = fold(emptySet()) { acc, item -> acc + item }
+fun <T : Any> Many<T>.toSet(): One<Set<T>> =
+    One.generate { emit ->
+        val fused = collectInto(mutableSetOf<T>()) { acc, item -> acc.also { it.add(item) } }
+        val outcome = fused ?: run {
+            val result = mutableSetOf<T>()
+            collect { value -> result.add(value); Signal.Downstream.Request }.mapLeft { result }
+        }
+        when (outcome) {
+            is Either.Left  -> { emit(Signal.Upstream.Next(outcome.value as Set<T>)); emit(Signal.Upstream.Complete) }
+            is Either.Right -> emit(Signal.Upstream.Error(outcome.value))
+        }
+    }
 
 /**
  * Suspends until the first item is emitted, then cancels the subscription.
@@ -167,7 +190,7 @@ suspend fun <T : Any> Many<T>.last(): Either<T, AelvException> {
     var result: Any = Unset
     val outcome = collect { value ->
         result = value
-        Signal.Downstream.Request(1)
+        Signal.Downstream.Request
     }
     return when {
         result !== Unset        -> {

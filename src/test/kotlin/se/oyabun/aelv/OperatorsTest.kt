@@ -610,8 +610,8 @@ class OperatorsTest {
 
         @Test
         fun `takeUntilOther stops when other signals`() {
-            val source = Sink.broadcast<Int>()
-            val other  = Sink.broadcast<Unit>()
+            val source = Sinks.broadcast<Int>()
+            val other  = Sinks.broadcast<Unit>()
             Verify.that(source.asMany().takeUntilOther(other.asMany()))
                 .runs { other.complete() }
                 .completesNormally()
@@ -912,7 +912,7 @@ class OperatorsTest {
 
         @Test
         fun `broadcast sink delivers items to subscriber`() = runTest {
-            val sink = Sink.replay<Int>()
+            val sink = Sinks.replay<Int>()
             sink.emit(1)
             sink.emit(2)
             sink.complete()
@@ -923,7 +923,7 @@ class OperatorsTest {
 
         @Test
         fun `broadcast sink does not replay to late subscriber`() = runTest {
-            val sink = Sink.broadcast<Int>()
+            val sink = Sinks.broadcast<Int>()
             sink.emit(1)
             sink.emit(2)
             sink.emit(3)
@@ -936,7 +936,7 @@ class OperatorsTest {
 
         @Test
         fun `replay sink replays full history to late subscriber`() = runTest {
-            val sink = Sink.replay<Int>()
+            val sink = Sinks.replay<Int>()
             sink.emit(1)
             sink.emit(2)
             sink.complete()
@@ -947,7 +947,7 @@ class OperatorsTest {
 
         @Test
         fun `replayLast sink replays only last n items`() = runTest {
-            val sink = Sink.replayLast<Int>(2)
+            val sink = Sinks.replayLast<Int>(2)
             sink.emit(1)
             sink.emit(2)
             sink.emit(3)
@@ -959,7 +959,7 @@ class OperatorsTest {
 
         @Test
         fun `sink complete is delivered to subscriber`() = runTest {
-            val sink = Sink.broadcast<Int>()
+            val sink = Sinks.broadcast<Int>()
             sink.complete()
             val result = sink.asMany().toList().get()
             assertIs<Either.Left<List<Int>>>(result)
@@ -969,7 +969,7 @@ class OperatorsTest {
         @Test
         fun `sink error is delivered to subscriber`() = runTest {
             val cause = InvalidDemandException(-1)
-            val sink = Sink.broadcast<Int>()
+            val sink = Sinks.broadcast<Int>()
             sink.error(cause)
             val result = sink.asMany().toList().get()
             assertIs<Either.Right<AelvException>>(result)
@@ -978,7 +978,7 @@ class OperatorsTest {
 
         @Test
         fun `broadcast sink delivers to multiple concurrent subscribers`() = runTest {
-            val sink = Sink.replay<Int>()
+            val sink = Sinks.replay<Int>()
             sink.emit(1)
             sink.emit(2)
             sink.complete()

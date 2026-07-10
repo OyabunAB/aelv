@@ -22,6 +22,12 @@ sealed class Either<out A, out B> {
     /** Returns the [Right] value, or null if this is a [Left]. */
     fun rightOrNull(): B? = if (this is Right) value else null
 
+    /** Returns the [Left] value, or throws the [Right] value if it is a [Throwable], otherwise throws [IllegalStateException]. */
+    fun leftOrThrow(): A = when (this) {
+        is Left  -> value
+        is Right -> throw if (value is Throwable) value else IllegalStateException("Either.Right: $value")
+    }
+
     /** Collapses both sides to [C] by applying [onLeft] or [onRight]. */
     inline fun <C> fold(onLeft: (A) -> C, onRight: (B) -> C): C = when (this) {
         is Left -> onLeft(value)

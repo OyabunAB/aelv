@@ -17,6 +17,14 @@ import kotlin.time.Duration
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 
+internal sealed interface Fusion<out T : Any> {
+    data object None : Fusion<Nothing>
+    abstract class Available<T : Any> : Fusion<T> {
+        abstract fun create(): Available<T>
+        abstract fun poll(): T?
+    }
+}
+
 /**
  * A cold, backpressure-first publisher of zero or more items of type [T].
  *
@@ -31,7 +39,12 @@ import org.reactivestreams.Subscriber
  * [toSet], [first], or [last].
  */
 class Many<T : Any> private constructor(
-    internal val source: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
+    internal val source: suspend (
+        onNext: suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError: suspend (AelvException) -> Unit,
+    ) -> Unit,
+    internal val fusion: Fusion<T> = Fusion.None,
 ) : Publisher<T> {
 
     override fun subscribe(subscriber: Subscriber<in T>) {
@@ -47,28 +60,39 @@ class Many<T : Any> private constructor(
     /** Bridges this [Many] to a [Flow]. */
     fun asFlow(): Flow<T> = flow {
         var error: AelvException? = null
-        source { signal ->
-            when (signal) {
-                is Signal.Upstream.Next     -> { emit(signal.value); Signal.Downstream.Request(1) }
-                is Signal.Upstream.Complete -> Signal.Downstream.Cancel
-                is Signal.Upstream.Error    -> { error = signal.cause; Signal.Downstream.Cancel }
-            }
-        }
+        source(
+            { value -> emit(value); Signal.Downstream.Request },
+            { },
+            { e -> error = e },
+        )
         error?.let { throw it }
     }
 
     internal suspend fun collect(
         action: suspend (T) -> Signal.Downstream,
     ): Either<Unit, AelvException> {
+        val f = fusion
+        if (f is Fusion.Available) {
+            val poll = f.create()
+            return try {
+                while (true) {
+                    val item = poll.poll() ?: break
+                    if (action(item) == Signal.Downstream.Cancel) return Unit.left()
+                }
+                Unit.left()
+            } catch (e: AelvException) {
+                e.right()
+            } catch (e: Throwable) {
+                UpstreamErrorException(e).right()
+            }
+        }
         var error: AelvException? = null
         try {
-            source { signal ->
-                when (signal) {
-                    is Signal.Upstream.Next     -> action(signal.value)
-                    is Signal.Upstream.Complete -> Signal.Downstream.Cancel
-                    is Signal.Upstream.Error    -> { error = signal.cause; Signal.Downstream.Cancel }
-                }
-            }
+            source(
+                { value -> action(value) },
+                { },
+                { e -> error = e },
+            )
         } catch (e: AelvException) {
             error = e
         } catch (e: Throwable) {
@@ -77,45 +101,91 @@ class Many<T : Any> private constructor(
         return error?.right() ?: Unit.left()
     }
 
+    internal fun <R : Any> collectInto(initial: R, accumulate: (R, T) -> R): Either<R, AelvException>? {
+        val f = fusion
+        if (f !is Fusion.Available) return null
+        val poll = f.create()
+        return try {
+            var acc = initial
+            while (true) acc = accumulate(acc, poll.poll() ?: break)
+            acc.left()
+        } catch (e: AelvException) {
+            e.right()
+        } catch (e: Throwable) {
+            UpstreamErrorException(e).right()
+        }
+    }
+
     companion object {
         /**
          * Creates a [Many] that emits [items] in order then completes.
          * Cancellation is respected between items.
          */
-        fun <T : Any> of(vararg items: T): Many<T> = Many { emit ->
-            for (item in items) {
-                if (emit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@Many
-            }
-            emit(Signal.Upstream.Complete)
-        }
+        fun <T : Any> of(vararg items: T): Many<T> = fused(
+            fusion = ArrayFusion(items),
+            block = { onNext, onComplete, _ ->
+                for (item in items) {
+                    if (onNext(item) == Signal.Downstream.Cancel) return@fused
+                }
+                onComplete()
+            },
+        )
 
         /**
          * Creates a [Many] that emits all items from [iterable] in order then completes.
          * Cancellation is respected between items.
          */
-        fun <T : Any> of(iterable: Iterable<T>): Many<T> = Many { emit ->
-            for (item in iterable) {
-                if (emit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@Many
-            }
-            emit(Signal.Upstream.Complete)
-        }
+        fun <T : Any> of(iterable: Iterable<T>): Many<T> = fused(
+            fusion = IterableFusion(iterable),
+            block = { onNext, onComplete, _ ->
+                for (item in iterable) {
+                    if (onNext(item) == Signal.Downstream.Cancel) return@fused
+                }
+                onComplete()
+            },
+        )
 
         internal fun <T : Any> generate(
             block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
+        ): Many<T> = build { onNext, onComplete, onError ->
+            block { signal ->
+                when (signal) {
+                    is Signal.Upstream.Next     -> onNext(signal.value)
+                    is Signal.Upstream.Complete -> { onComplete(); Signal.Downstream.Cancel }
+                    is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
+                }
+            }
+        }
+
+        internal fun <T : Any> build(
+            block: suspend (
+                onNext: suspend (T) -> Signal.Downstream,
+                onComplete: suspend () -> Unit,
+                onError: suspend (AelvException) -> Unit,
+            ) -> Unit,
         ): Many<T> = Many(block)
+
+        internal fun <T : Any> fused(
+            fusion: Fusion<T>,
+            block: suspend (
+                onNext: suspend (T) -> Signal.Downstream,
+                onComplete: suspend () -> Unit,
+                onError: suspend (AelvException) -> Unit,
+            ) -> Unit,
+        ): Many<T> = Many(block, fusion)
 
         /**
          * Bridges a [Flow] to a [Many].  The flow is collected on each subscription,
          * making this a cold source.
          */
-        fun <T : Any> from(flow: Flow<T>): Many<T> = Many { emit ->
+        fun <T : Any> from(flow: Flow<T>): Many<T> = build { onNext, onComplete, _ ->
             try {
                 coroutineScope {
                     flow.collect { item ->
-                        if (emit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) cancel()
+                        if (onNext(item) == Signal.Downstream.Cancel) cancel()
                     }
                 }
-                emit(Signal.Upstream.Complete)
+                onComplete()
             } catch (_: CancellationException) {}
         }
 
@@ -124,28 +194,49 @@ class Many<T : Any> private constructor(
          */
         fun <T : Any> from(publisher: Publisher<T>): Many<T> = from(publisher.publisherAsFlow())
 
+        /** Emits integers from [start] (inclusive) to [start] + [count] (exclusive) using a primitive counter. */
+        fun range(start: Int, count: Int): Many<Int> {
+            require(count >= 0) { "count must be non-negative, got $count" }
+            return fused(
+                fusion = RangeFusion(start, count),
+                block = { onNext, onComplete, _ ->
+                    val end = start.toLong() + count
+                    var i = start.toLong()
+                    while (i < end) {
+                        if (onNext(i.toInt()) == Signal.Downstream.Cancel) return@fused
+                        i++
+                    }
+                    onComplete()
+                },
+            )
+        }
+
+        /** Emits the given items in order then completes — zero-allocation vararg overload. */
+        fun <T : Any> just(vararg items: T): Many<T> = of(*items)
+
         /** A [Many] that completes immediately without emitting any items. */
-        fun <T : Any> empty(): Many<T> = Many { emit -> emit(Signal.Upstream.Complete) }
+        fun <T : Any> empty(): Many<T> = build { _, onComplete, _ -> onComplete() }
 
         /** A [Many] that immediately signals [cause] as an error. */
-        fun <T : Any> error(cause: AelvException): Many<T> = Many { emit ->
-            emit(Signal.Upstream.Error(cause))
+        fun <T : Any> error(cause: AelvException): Many<T> = build { _, _, onError ->
+            onError(cause)
         }
 
         /** A [Many] that never emits or completes.  Useful for testing and timeouts. */
-        fun <T : Any> never(): Many<T> = Many { awaitCancellation() }
+        fun <T : Any> never(): Many<T> = build { _, _, _ -> awaitCancellation() }
 
         /**
          * Emits an ever-increasing [Long] tick (0, 1, 2, …) every [period], starting after the
          * first period elapses.  Respects downstream demand: if the subscriber is slower than the
          * tick rate, emission suspends until demand arrives.
          */
-        fun interval(period: Duration): Many<Long> = Many { emit ->
+        fun interval(period: Duration): Many<Long> = build { onNext, onComplete, _ ->
             var tick = 0L
             while (true) {
                 delay(period)
-                if (emit(Signal.Upstream.Next(tick++)) == Signal.Downstream.Cancel) return@Many
+                if (onNext(tick++) == Signal.Downstream.Cancel) return@build
             }
+            onComplete()
         }
     }
 }
@@ -160,7 +251,11 @@ class Many<T : Any> private constructor(
  * the other operators defined on [One].
  */
 class One<T : Any> private constructor(
-    internal val source: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
+    internal val source: suspend (
+        onNext: suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError: suspend (AelvException) -> Unit,
+    ) -> Unit,
 ) : Publisher<T> {
 
     override fun subscribe(subscriber: Subscriber<in T>) {
@@ -176,31 +271,33 @@ class One<T : Any> private constructor(
     /** Bridges this [One] to a [Flow]. */
     fun asFlow(): Flow<T> = flow {
         var error: AelvException? = null
-        source { signal ->
-            when (signal) {
-                is Signal.Upstream.Next     -> { emit(signal.value); Signal.Downstream.Request(1) }
-                is Signal.Upstream.Complete -> Signal.Downstream.Cancel
-                is Signal.Upstream.Error    -> { error = signal.cause; Signal.Downstream.Cancel }
-            }
-        }
+        source(
+            { value -> emit(value); Signal.Downstream.Request },
+            { },
+            { e -> error = e },
+        )
         error?.let { throw it }
     }
 
     /** Widens this [One] to a [Many] that emits the single value then completes. */
-    fun asMany(): Many<T> = Many.generate { emit -> source { emit(it) } }
+    fun asMany(): Many<T> = Many.generate { emit ->
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { e -> emit(Signal.Upstream.Error(e)) },
+        )
+    }
 
     internal suspend fun collect(
         action: suspend (T) -> Signal.Downstream,
     ): Either<Unit, AelvException> {
         var error: AelvException? = null
         try {
-            source { signal ->
-                when (signal) {
-                    is Signal.Upstream.Next     -> action(signal.value)
-                    is Signal.Upstream.Complete -> Signal.Downstream.Cancel
-                    is Signal.Upstream.Error    -> { error = signal.cause; Signal.Downstream.Cancel }
-                }
-            }
+            source(
+                { value -> action(value) },
+                { },
+                { e -> error = e },
+            )
         } catch (e: AelvException) {
             error = e
         } catch (e: Throwable) {
@@ -210,48 +307,56 @@ class One<T : Any> private constructor(
     }
 
     companion object {
-        fun <T : Any> of(value: T): One<T> = One { emit ->
-            if (emit(Signal.Upstream.Next(value)) != Signal.Downstream.Cancel)
-                emit(Signal.Upstream.Complete)
+        fun <T : Any> of(value: T): One<T> = One { onNext, onComplete, _ ->
+            if (onNext(value) != Signal.Downstream.Cancel)
+                onComplete()
         }
 
         /**
          * Creates a [One] that lazily evaluates [block] on each subscription and emits the result.
          * Exceptions thrown by [block] are propagated as [UpstreamErrorException].
          */
-        fun <T : Any> defer(context: CoroutineContext? = null, block: suspend () -> T): One<T> = One { emit ->
+        fun <T : Any> defer(context: CoroutineContext? = null, block: suspend () -> T): One<T> = One { onNext, onComplete, _ ->
             val value = if (context != null) withContext(currentCoroutineContext() + context) { block() } else block()
-            if (emit(Signal.Upstream.Next(value)) != Signal.Downstream.Cancel)
-                emit(Signal.Upstream.Complete)
+            if (onNext(value) != Signal.Downstream.Cancel)
+                onComplete()
         }
 
         internal fun <T : Any> generate(
             block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
-        ): One<T> = One(block)
+        ): One<T> = One { onNext, onComplete, onError ->
+            block { signal ->
+                when (signal) {
+                    is Signal.Upstream.Next     -> onNext(signal.value)
+                    is Signal.Upstream.Complete -> { onComplete(); Signal.Downstream.Cancel }
+                    is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
+                }
+            }
+        }
 
         /**
          * Bridges a Reactive Streams [Publisher] to a [One] by taking its first emitted item.
          * Completes after the first item regardless of how many the publisher would produce.
          */
-        fun <T : Any> from(publisher: Publisher<T>): One<T> = One { emit ->
+        fun <T : Any> from(publisher: Publisher<T>): One<T> = One { onNext, onComplete, _ ->
             try {
                 coroutineScope {
                     publisher.publisherAsFlow().collect { value ->
-                        emit(Signal.Upstream.Next(value))
+                        onNext(value)
                         cancel()
                     }
                 }
             } catch (_: CancellationException) {}
-            emit(Signal.Upstream.Complete)
+            onComplete()
         }
 
         /** A [One] that immediately signals [cause] as an error. */
-        fun <T : Any> error(cause: AelvException): One<T> = One { emit ->
-            emit(Signal.Upstream.Error(cause))
+        fun <T : Any> error(cause: AelvException): One<T> = One { _, _, onError ->
+            onError(cause)
         }
 
         /** A [One] that never emits or completes.  Useful for testing and timeouts. */
-        fun <T : Any> never(): One<T> = One { awaitCancellation() }
+        fun <T : Any> never(): One<T> = One { _, _, _ -> awaitCancellation() }
 
         /**
          * Creates a [One] by invoking [block] with a callback pair: call [success] with a value
@@ -364,5 +469,59 @@ class None<T : Any> private constructor(
 
         /** A [None] that never completes.  Useful for testing and timeouts. */
         fun <T : Any> never(): None<T> = None { awaitCancellation() }
+    }
+}
+
+private class RangeFusion(private val start: Int, private val count: Int) : Fusion.Available<Int>() {
+    private val end: Long = start.toLong() + count
+    private var current: Long = start.toLong()
+    override fun create(): Fusion.Available<Int> = RangeFusion(start, count)
+    override fun poll(): Int? = if (current < end) current++.toInt() else null
+}
+
+private class ArrayFusion<T : Any>(private val items: Array<out T>) : Fusion.Available<T>() {
+    private var index = 0
+    override fun create(): Fusion.Available<T> = ArrayFusion(items)
+    override fun poll(): T? = if (index < items.size) items[index++] else null
+}
+
+private class IterableFusion<T : Any>(private val iterable: Iterable<T>) : Fusion.Available<T>() {
+    private var iterator: Iterator<T> = iterable.iterator()
+    override fun create(): Fusion.Available<T> = IterableFusion(iterable)
+    override fun poll(): T? = if (iterator.hasNext()) iterator.next() else null
+}
+
+internal class MapFusion<T : Any, R : Any>(
+    private val upstream: Fusion.Available<T>,
+    private val transform: (T) -> R,
+) : Fusion.Available<R>() {
+    override fun create(): Fusion.Available<R> = MapFusion(upstream.create(), transform)
+    override fun poll(): R? = upstream.poll()?.let(transform)
+}
+
+internal class FilterFusion<T : Any>(
+    private val upstream: Fusion.Available<T>,
+    private val predicate: (T) -> Boolean,
+) : Fusion.Available<T>() {
+    override fun create(): Fusion.Available<T> = FilterFusion(upstream.create(), predicate)
+    override fun poll(): T? {
+        while (true) {
+            val item = upstream.poll() ?: return null
+            if (predicate(item)) return item
+        }
+    }
+}
+
+internal class TakeFusion<T : Any>(
+    private val upstream: Fusion.Available<T>,
+    private val limit: Long,
+) : Fusion.Available<T>() {
+    private var remaining = limit
+    override fun create(): Fusion.Available<T> = TakeFusion(upstream.create(), limit)
+    override fun poll(): T? {
+        if (remaining == 0L) return null
+        val item = upstream.poll() ?: return null
+        remaining--
+        return item
     }
 }

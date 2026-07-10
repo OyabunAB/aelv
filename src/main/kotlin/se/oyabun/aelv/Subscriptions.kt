@@ -14,55 +14,58 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
+private val dispatcher = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()) { r ->
+    Thread(r, "aelv-worker").also { it.isDaemon = true }
+}.asCoroutineDispatcher()
+
+private val sharedScope = CoroutineScope(dispatcher + SupervisorJob())
+
 internal class StreamSubscription<T : Any>(
     private val subscriber: Subscriber<in T>,
-    private val source: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
+    private val source: suspend (
+        onNext: suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError: suspend (AelvException) -> Unit,
+    ) -> Unit,
 ) : Subscription {
 
-    private val log = Logging.of<StreamSubscription<*>>()
+    private val log  = Logging.of<StreamSubscription<*>>()
     private val name = subscriber::class.simpleName ?: "Subscriber"
-
-    private val executor   = Executors.newSingleThreadExecutor { r -> Thread(r, "aelv-$name").also { it.isDaemon = true } }
-    private val dispatcher = executor.asCoroutineDispatcher()
-    private val scope      = CoroutineScope(dispatcher + SupervisorJob())
 
     private val demand     = AtomicLong(0L)
     private val signal     = Channel<Unit>(Channel.UNLIMITED)
     private val terminated = AtomicBoolean(false)
     private val started    = AtomicBoolean(false)
     private val producer   = AtomicReference<Job?>(null)
+
     private fun start() {
         log.stream.subscribing(name)
-        val job = scope.launch {
+        val job = sharedScope.launch {
             try {
-                source { upstream ->
-                    when (upstream) {
-                        is Signal.Upstream.Next -> {
-                            awaitDemand()
-                            if (terminated.get()) return@source Signal.Downstream.Cancel
-                            demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
-                            subscriber.onNext(upstream.value)
-                            if (terminated.get()) Signal.Downstream.Cancel
-                            else Signal.Downstream.Request(1)
+                source(
+                    { value ->
+                        awaitDemand()
+                        if (terminated.get()) return@source Signal.Downstream.Cancel
+                        demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
+                        subscriber.onNext(value)
+                        if (terminated.get()) Signal.Downstream.Cancel
+                        else Signal.Downstream.Request
+                    },
+                    {
+                        if (terminated.compareAndSet(false, true)) {
+                            log.stream.completed(name)
+                            subscriber.onComplete()
                         }
-                        is Signal.Upstream.Complete -> {
-                            if (terminated.compareAndSet(false, true)) {
-                                log.stream.completed(name)
-                                subscriber.onComplete()
-                            }
-                            shutdown()
-                            Signal.Downstream.Cancel
+                        shutdown()
+                    },
+                    { cause ->
+                        if (terminated.compareAndSet(false, true)) {
+                            log.stream.error(name, cause)
+                            subscriber.onError(cause)
                         }
-                        is Signal.Upstream.Error -> {
-                            if (terminated.compareAndSet(false, true)) {
-                                log.stream.error(name, upstream.cause)
-                                subscriber.onError(upstream.cause)
-                            }
-                            shutdown()
-                            Signal.Downstream.Cancel
-                        }
-                    }
-                }
+                        shutdown()
+                    },
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -79,8 +82,6 @@ internal class StreamSubscription<T : Any>(
 
     private fun shutdown() {
         signal.close()
-        dispatcher.close()
-        executor.shutdown()
     }
 
     override fun request(n: Long) {
@@ -125,19 +126,15 @@ internal class CompletionSubscription(
     private val source: suspend () -> Unit,
 ) : Subscription {
 
-    private val log = Logging.of<CompletionSubscription>()
+    private val log  = Logging.of<CompletionSubscription>()
     private val name = subscriber::class.simpleName ?: "Subscriber"
-
-    private val executor   = Executors.newSingleThreadExecutor { r -> Thread(r, "aelv-$name").also { it.isDaemon = true } }
-    private val dispatcher = executor.asCoroutineDispatcher()
-    private val scope      = CoroutineScope(dispatcher + SupervisorJob())
 
     private val terminated = AtomicBoolean(false)
     private val producer   = AtomicReference<Job?>(null)
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = scope.launch {
+        val job = sharedScope.launch {
             try {
                 source()
                 if (terminated.compareAndSet(false, true)) {
@@ -151,9 +148,6 @@ internal class CompletionSubscription(
                     log.stream.error(name, e)
                     subscriber.onError(e)
                 }
-            } finally {
-                dispatcher.close()
-                executor.shutdown()
             }
         }
         if (!producer.compareAndSet(null, job)) job.cancel()
@@ -164,8 +158,6 @@ internal class CompletionSubscription(
             if (terminated.compareAndSet(false, true)) {
                 producer.get()?.cancel()
                 subscriber.onError(InvalidDemandException(n))
-                dispatcher.close()
-                executor.shutdown()
             }
             return
         }
@@ -177,8 +169,6 @@ internal class CompletionSubscription(
         if (terminated.compareAndSet(false, true)) {
             log.stream.cancelled(name)
             producer.get()?.cancel()
-            dispatcher.close()
-            executor.shutdown()
         }
     }
 }

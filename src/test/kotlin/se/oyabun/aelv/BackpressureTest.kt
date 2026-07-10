@@ -169,6 +169,106 @@ class BackpressureTest {
     }
 
     // -------------------------------------------------------------------------
+    // RS 1.1: Only as many items as requested must ever be in-flight at once.
+    //
+    // A slow subscriber that requests one item at a time must not cause the
+    // producer to buffer more than one item. We track peak concurrent in-flight
+    // (produced but not yet consumed) items using an AtomicInteger and assert it
+    // never exceeds 1.
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `Many — in-flight item count never exceeds demand (1 at a time)`() = runTest {
+        val inFlight = AtomicInteger(0)
+        val peakInFlight = AtomicInteger(0)
+
+        val source = Many.generate<Int> { emit ->
+            for (i in 0 until 1_000) {
+                inFlight.incrementAndGet().also { n ->
+                    peakInFlight.updateAndGet { prev -> if (n > prev) n else prev }
+                }
+                if (emit(Signal.Upstream.Next(i)) == Signal.Downstream.Cancel) return@generate
+            }
+            emit(Signal.Upstream.Complete)
+        }
+
+        source
+            .doOnNext { inFlight.decrementAndGet() }
+            .toList()
+            .get()
+
+        assertEquals(
+            1,
+            peakInFlight.get(),
+            "RS 1.1: peak in-flight was ${peakInFlight.get()}, must be exactly 1 for a synchronous single-demand subscriber"
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // RS 1.1: buffer(n) must hold at most n items at a time in memory.
+    //
+    // We track peak concurrent items held inside the buffer by counting produced
+    // vs consumed items. The delta must never exceed the declared buffer size.
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `buffer — never holds more than declared size items in memory`() = runTest {
+        val bufferSize = 8
+        val produced = AtomicInteger(0)
+        val consumed = AtomicInteger(0)
+        val peakBuffered = AtomicInteger(0)
+
+        Many.generate<Int> { emit ->
+            for (i in 0 until 200) {
+                produced.incrementAndGet()
+                peakBuffered.updateAndGet { prev ->
+                    val current = produced.get() - consumed.get()
+                    if (current > prev) current else prev
+                }
+                if (emit(Signal.Upstream.Next(i)) == Signal.Downstream.Cancel) return@generate
+            }
+            emit(Signal.Upstream.Complete)
+        }
+            .buffer(bufferSize)
+            .doOnNext { consumed.addAndGet(it.size) }
+            .toList()
+            .get()
+
+        assertTrue(
+            peakBuffered.get() <= bufferSize + 1, // +1 for the item in transit
+            "buffer($bufferSize): peak buffered was ${peakBuffered.get()}, must be ≤ ${bufferSize + 1}"
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // RS 1.1: skip(n) must not buffer skipped items — it must signal Cancel after
+    // consuming exactly n items, not collect all items and discard later.
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `skip — upstream produces only n + demanded items, no full materialization`() = runTest {
+        val produced = AtomicLong(0)
+        val skip = 5L
+        val take = 3L
+
+        val source = Many.generate<Int> { emit ->
+            for (i in 0 until 10_000) {
+                produced.incrementAndGet()
+                if (emit(Signal.Upstream.Next(i)) == Signal.Downstream.Cancel) return@generate
+            }
+            emit(Signal.Upstream.Complete)
+        }
+
+        source.skip(skip).take(take).toList().get()
+
+        assertEquals(
+            skip + take,
+            produced.get(),
+            "skip($skip).take($take): upstream produced ${produced.get()}, must be exactly ${skip + take}"
+        )
+    }
+
+    // -------------------------------------------------------------------------
     // RS 1.3: signals MUST be serial.
     //
     // combineLatest runs two child coroutines on Dispatchers.Default. They share

@@ -32,3 +32,5 @@ build/
 
 # Session state
 STATE.md
+jmh-result*
+se.oyabun.aelv.benchmarks.*/

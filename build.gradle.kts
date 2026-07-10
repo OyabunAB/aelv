@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.signing)
     alias(libs.plugins.dokka)
     alias(libs.plugins.nexusPublish)
+    alias(libs.plugins.jmh)
 }
 
 version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
@@ -18,19 +19,15 @@ sourceSets {
 }
 
 dependencies {
-    api(libs.reactive.streams)
-    implementation(libs.coroutines.core)
-    implementation(libs.coroutines.reactive)
-    implementation(libs.slf4j.api)
+    api(libs.bundles.core.api)
+    implementation(libs.bundles.core)
 
-    testImplementation(libs.kotlin.test)
-    testImplementation(libs.kotlin.test.junit5)
-    testImplementation(libs.coroutines.test)
-    testImplementation(libs.logback.classic)
+    testImplementation(libs.bundles.test)
 
-    "tckImplementation"(libs.reactive.streams.tck)
-    "tckImplementation"(libs.testng)
-    "tckImplementation"(libs.logback.classic)
+    "tckImplementation"(libs.bundles.tck)
+
+    "jmhImplementation"(libs.bundles.jmh.benchmarks)
+    "jmhAnnotationProcessor"(libs.jmh.generator.annprocess)
 }
 
 version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
@@ -64,6 +61,16 @@ val tckTest by tasks.registering(Test::class) {
 }
 
 tasks.check { dependsOn(tckTest) }
+
+jmh {
+    warmupIterations = 2
+    iterations = 3
+    fork = 1
+    timeUnit = "ms"
+    benchmarkMode = listOf("thrpt")
+    resultFormat = "JSON"
+    resultsFile = project.file("build/reports/jmh/results.json")
+}
 
 tasks.test {
     useJUnitPlatform()
