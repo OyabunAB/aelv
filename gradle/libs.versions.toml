@@ -10,7 +10,7 @@ dokka             = "2.2.0"
 jmh               = "1.37"
 reactor           = "3.7.6"
 rxjava            = "3.1.10"
-mutiny            = "2.8.0"
+mutiny            = "3.3.0"
 
 [libraries]
 reactive_streams     = { group = "org.reactivestreams",      name = "reactive-streams",            version.ref = "reactive_streams" }
