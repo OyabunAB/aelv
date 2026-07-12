@@ -22,6 +22,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import java.util.concurrent.Executors
@@ -63,6 +64,7 @@ internal class StreamSubscription<T : Any>(
     private fun start() {
         log.stream.subscribing(name)
         val producerJob = sharedScope.launch {
+            yield() // ensure onSubscribe has returned before delivering any signals (RS §1.9)
             try {
                 source(
                     { value ->
@@ -156,6 +158,7 @@ internal class CompletionSubscription(
     private fun start() {
         log.stream.subscribing(name)
         val producerJob = sharedScope.launch {
+            yield() // ensure onSubscribe has returned before delivering any signals (RS §1.9)
             try {
                 source()
                 if (terminated.compareAndSet(false, true)) {
