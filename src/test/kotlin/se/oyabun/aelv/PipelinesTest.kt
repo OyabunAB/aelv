@@ -34,7 +34,7 @@ class PipelinesTest {
             val pipeline: Many<Int> = Many.pipelineFrom<Int>().map { it * 2 }
 
             val result = Many.items(1, 2, 3).applyTo(pipeline).toList().await()
-            assertIs<Either.Right<List<Int>>>(result)
+            assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(2, 4, 6), result.value)
         }
 
@@ -45,7 +45,7 @@ class PipelinesTest {
                 .toList()
 
             val result = Many.range(0, 6).applyTo(pipeline).await()
-            assertIs<Either.Right<List<Int>>>(result)
+            assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(0, 2, 4), result.value)
         }
 
@@ -54,7 +54,7 @@ class PipelinesTest {
             val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 10 }.toList()
 
             val result = Many.empty<Int>().applyTo(pipeline).await()
-            assertIs<Either.Right<List<Int>>>(result)
+            assertIs<Success<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
@@ -68,7 +68,7 @@ class PipelinesTest {
                 .toList()
 
             val result = Many.range(0, 5).applyTo(pipeline).await()
-            assertIs<Either.Right<List<Int>>>(result)
+            assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(6, 8), result.value)
         }
 
@@ -79,8 +79,8 @@ class PipelinesTest {
             val r1 = Many.items(1, 2, 3).applyTo(pipeline).await()
             val r2 = Many.items(10, 20, 30).applyTo(pipeline).await()
 
-            assertIs<Either.Right<List<Int>>>(r1)
-            assertIs<Either.Right<List<Int>>>(r2)
+            assertIs<Success<List<Int>>>(r1)
+            assertIs<Success<List<Int>>>(r2)
             assertEquals(listOf(2, 3, 4), r1.value)
             assertEquals(listOf(11, 21, 31), r2.value)
         }
@@ -94,7 +94,7 @@ class PipelinesTest {
             }.awaitAll()
 
             results.forEachIndexed { i, result ->
-                assertIs<Either.Right<List<Int>>>(result)
+                assertIs<Success<List<Int>>>(result)
                 val base = i * 10
                 assertEquals((base until base + 5).map { it * 3 }, result.value)
             }
@@ -114,7 +114,7 @@ class PipelinesTest {
             val full = trim.then(upper).then(collect)
 
             val result = Many.items(" hello ", " world ").applyTo(full).await()
-            assertIs<Either.Right<List<String>>>(result)
+            assertIs<Success<List<String>>>(result)
             assertEquals(listOf("HELLO", "WORLD"), result.value)
         }
 
@@ -127,7 +127,7 @@ class PipelinesTest {
             val full = evens.then(doubled).then(collect)
 
             val result = Many.range(0, 6).applyTo(full).await()
-            assertIs<Either.Right<List<Int>>>(result)
+            assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(0, 4, 8), result.value)
         }
 
@@ -140,8 +140,8 @@ class PipelinesTest {
             val r1 = Many.items(1, 2, 3).applyTo(pipeline).await()
             val r2 = Many.items(10, 20, 30).applyTo(pipeline).await()
 
-            assertIs<Either.Right<List<Int>>>(r1)
-            assertIs<Either.Right<List<Int>>>(r2)
+            assertIs<Success<List<Int>>>(r1)
+            assertIs<Success<List<Int>>>(r2)
             assertEquals(listOf(0, 1, 2), r1.value)
             assertEquals(listOf(9, 19, 29), r2.value)
         }
@@ -157,7 +157,7 @@ class PipelinesTest {
 
             // (0..4) → +1 → *2 → filter>5 → [6, 8]  (mapped: 1,2,3,4,5 → 2,4,6,8,10 → 6,8,10)
             val result = Many.range(0, 5).applyTo(full).await()
-            assertIs<Either.Right<List<Int>>>(result)
+            assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(6, 8, 10), result.value)
         }
 
@@ -172,7 +172,7 @@ class PipelinesTest {
             }.awaitAll()
 
             results.forEachIndexed { i, result ->
-                assertIs<Either.Right<List<Int>>>(result)
+                assertIs<Success<List<Int>>>(result)
                 val base = i * 5
                 assertEquals((base until base + 5).map { it * 2 }, result.value)
             }
@@ -188,7 +188,7 @@ class PipelinesTest {
             val pipeline: One<String> = One.pipelineFrom<Int>().map { it.toString() }
 
             val result = One.single(42).applyTo(pipeline).await()
-            assertIs<Either.Right<String>>(result)
+            assertIs<Success<String>>(result)
             assertEquals("42", result.value)
         }
 
@@ -200,7 +200,7 @@ class PipelinesTest {
             val full = stringify.then(prefix)
 
             val result = One.single(7).applyTo(full).await()
-            assertIs<Either.Right<String>>(result)
+            assertIs<Success<String>>(result)
             assertEquals("value=7", result.value)
         }
     }

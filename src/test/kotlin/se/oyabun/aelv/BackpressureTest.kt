@@ -60,7 +60,7 @@ class BackpressureTest {
 
         val result = source.take(3).toList().await()
 
-        assertIs<Either.Right<List<Int>>>(result)
+        assertIs<Success<List<Int>>>(result)
         assertEquals(listOf(0, 1, 2), result.value)
         assertEquals(
             3L,
@@ -92,7 +92,7 @@ class BackpressureTest {
 
         val result = source.takeWhile { it < 3 }.toList().await()
 
-        assertIs<Either.Right<List<Int>>>(result)
+        assertIs<Success<List<Int>>>(result)
         assertEquals(listOf(0, 1, 2), result.value)
         assertTrue(
             produced.get() <= 4L,
@@ -174,7 +174,7 @@ class BackpressureTest {
                     .await()
             }
 
-            assertIs<Either.Right<List<String>>>(result)
+            assertIs<Success<List<String>>>(result)
             assertEquals(
                 listOf("1x1", "2x2"),
                 result.value,

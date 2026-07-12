@@ -246,7 +246,20 @@ private suspend fun execSuspend(
 
     var cancelled = false
     block(
-        { item -> applyFrame(item, frame, todo).also { if (it == Signal.Downstream.Cancel) cancelled = true } },
+        { item ->
+            val sig = when (val node = frame) {
+                is Frame.ConcatBind<*, *> -> {
+                    node as Frame.ConcatBind<Any, Any>
+                    when (val result = interpret(node.transform(item).step, node.next)) {
+                        is Either.Right -> if (result.value) Signal.Downstream.Request else Signal.Downstream.Cancel
+                        is Either.Left  -> throw result.value
+                    }
+                }
+                else -> applyFrame(item, frame, todo)
+            }
+            if (sig == Signal.Downstream.Cancel) cancelled = true
+            sig
+        },
         {},
         { exception -> throw exception },
     )
