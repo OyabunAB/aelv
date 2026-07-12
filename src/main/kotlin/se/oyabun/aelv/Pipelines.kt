@@ -80,7 +80,7 @@ fun <T : Any, R : Any> Many<T>.then(next: Many<R>): Many<R> {
  * Composes this [Many] pipeline step with a terminal [One] [next], returning a [One] that feeds
  * this step's output into [next]'s [Many.pipelineFrom] source slot.
  *
- * Typical use: attaching a collecting terminal (e.g. [toList], [fold]) to a [Many] pipeline.
+ * Typical use: attaching a collecting terminal (issue.g. [toList], [fold]) to a [Many] pipeline.
  * ```kotlin
  * val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 2 }.then(collector)
  * ```
@@ -96,7 +96,7 @@ fun <T : Any, R : Any> Many<T>.then(next: One<R>): One<R> {
             next.source(
                 { v -> emit(Signal.Upstream.Next(v)) },
                 { emit(Signal.Upstream.Complete) },
-                { e -> emit(Signal.Upstream.Error(e)) },
+                { issue -> emit(Signal.Upstream.Error(issue)) },
             )
         }
     }
@@ -136,7 +136,7 @@ fun <T : Any, R : Any> One<T>.then(next: One<R>): One<R> {
                 left.source(
                     { v -> innerEmit(Signal.Upstream.Next(v)) },
                     { innerEmit(Signal.Upstream.Complete) },
-                    { e -> innerEmit(Signal.Upstream.Error(e)) },
+                    { issue -> innerEmit(Signal.Upstream.Error(issue)) },
                 )
             }
         }
@@ -144,7 +144,7 @@ fun <T : Any, R : Any> One<T>.then(next: One<R>): One<R> {
             next.source(
                 { v -> emit(Signal.Upstream.Next(v)) },
                 { emit(Signal.Upstream.Complete) },
-                { e -> emit(Signal.Upstream.Error(e)) },
+                { issue -> emit(Signal.Upstream.Error(issue)) },
             )
         }
     }

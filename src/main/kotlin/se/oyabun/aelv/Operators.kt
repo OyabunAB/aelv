@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicInteger
@@ -165,25 +166,21 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
             var outerError: Any = Unset
             source(
                 { value ->
-                    semaphore.acquire()
                     val innerChannel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
                     orderChannel.send(innerChannel)
                     launch {
-                        try {
+                        semaphore.withPermit {
                             transform(value).source(
                                 { inner -> innerChannel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { innerChannel.close() },
-                                { e -> innerChannel.close(e) },
+                                { issue -> innerChannel.close(issue) },
                             )
-                        } finally {
-                            semaphore.release()
-                            innerChannel.close()
                         }
                     }
                     Signal.Downstream.Request
                 },
                 { },
-                { e -> outerError = e },
+                { issue -> outerError = issue },
             )
             val sentinel = Channel<Signal.Upstream<R>>(0)
             if (outerError.isError()) sentinel.close(outerError.asError()) else sentinel.close()
@@ -193,7 +190,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
         var cancelled = false
         for (innerChannel in orderChannel) {
             if (cancelled) { innerChannel.cancel(); continue }
-            try {
+            val result = Either.catching {
                 for (signal in innerChannel) {
                     when (signal) {
                         is Signal.Upstream.Next -> if (emit(signal) == Signal.Downstream.Cancel) {
@@ -202,14 +199,11 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                         else -> break
                     }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (!cancelled) {
-                    cancelled = true
-                    producerJob.cancel()
-                    emit(Signal.Upstream.Error(e))
-                }
+            }
+            if (result is Either.Left && !cancelled) {
+                cancelled = true
+                producerJob.cancel()
+                emit(Signal.Upstream.Error(result.value))
             }
         }
         if (!cancelled) emit(Signal.Upstream.Complete)
@@ -233,7 +227,7 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
                             transform(value).source(
                                 { inner -> channel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { },
-                                { e -> channel.send(Signal.Upstream.Error(e)) },
+                                { issue -> channel.send(Signal.Upstream.Error(issue)) },
                             )
                         }
                         Signal.Downstream.Request
@@ -242,9 +236,9 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
                         activeJob.join()
                         channel.send(Signal.Upstream.Complete)
                     },
-                    { e ->
+                    { issue ->
                         activeJob.cancelAndJoin()
-                        channel.send(Signal.Upstream.Error(e))
+                        channel.send(Signal.Upstream.Error(issue))
                     },
                 )
                 channel.close()
@@ -279,7 +273,7 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
                 source(
                     { value -> channel.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { channel.send(Signal.Upstream.Complete) },
-                    { e -> channel.send(Signal.Upstream.Error(e)) },
+                    { issue -> channel.send(Signal.Upstream.Error(issue)) },
                 )
                 channel.close()
             }
@@ -306,13 +300,13 @@ fun <T : Any> Many<T>.delaySubscription(trigger: Publisher<*>): Many<T> =
         Many.from(trigger).source(
             { Signal.Downstream.Cancel },
             { },
-            { e -> triggerFailed = true; emit(Signal.Upstream.Error(e)) },
+            { issue -> triggerFailed = true; emit(Signal.Upstream.Error(issue)) },
         )
         if (triggerFailed) return@generate
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -333,7 +327,7 @@ fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
                     src.source(
                         { value -> channel.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                         { if (remaining.decrementAndGet() == 0) channel.close() },
-                        { e -> channel.send(Signal.Upstream.Error(e)) },
+                        { issue -> channel.send(Signal.Upstream.Error(issue)) },
                     )
                 }
             }
@@ -375,7 +369,7 @@ fun <T : Any> concat(vararg sources: Many<T>): Many<T> =
                     } else Signal.Downstream.Request
                 },
                 { },
-                { e -> emit(Signal.Upstream.Error(e)); errored = true },
+                { issue -> emit(Signal.Upstream.Error(issue)); errored = true },
             )
             if (cancelled || errored) return@generate
         }
@@ -395,14 +389,14 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
                 a.source(
                     { value -> channelA.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { channelA.send(Signal.Upstream.Complete) },
-                    { e -> channelA.send(Signal.Upstream.Error(e)) },
+                    { issue -> channelA.send(Signal.Upstream.Error(issue)) },
                 )
             }
             val jobB = launch {
                 b.source(
                     { value -> channelB.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { channelB.send(Signal.Upstream.Complete) },
-                    { e -> channelB.send(Signal.Upstream.Error(e)) },
+                    { issue -> channelB.send(Signal.Upstream.Error(issue)) },
                 )
             }
             var zipError: Any = Unset
@@ -436,14 +430,14 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                 a.source(
                     { value -> channel.send(Signal.Upstream.Next(Either.Left(value))); Signal.Downstream.Request },
                     { },
-                    { e -> channel.send(Signal.Upstream.Error(e)) },
+                    { issue -> channel.send(Signal.Upstream.Error(issue)) },
                 )
             }
             val jobB = launch {
                 b.source(
                     { value -> channel.send(Signal.Upstream.Next(Either.Right(value))); Signal.Downstream.Request },
                     { },
-                    { e -> channel.send(Signal.Upstream.Error(e)) },
+                    { issue -> channel.send(Signal.Upstream.Error(issue)) },
                 )
             }
             val closerJob = launch {
@@ -513,7 +507,7 @@ fun <T : Any> Many<T>.buffer(size: Int): Many<List<T>> {
                 }
                 emit(Signal.Upstream.Complete)
             },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 }
@@ -552,7 +546,7 @@ fun <T : Any> Many<T>.buffer(size: Int, skip: Int): Many<List<T>> {
                 }
                 emit(Signal.Upstream.Complete)
             },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 }
@@ -578,8 +572,8 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                     {
                         events.send(Either.Left(Signal.Upstream.Complete))
                     },
-                    { e ->
-                        events.send(Either.Left(Signal.Upstream.Error(e)))
+                    { issue ->
+                        events.send(Either.Left(Signal.Upstream.Error(issue)))
                     },
                 )
                 events.close()
@@ -670,7 +664,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                             groupHandler(key, groupMany).source(
                                 { inner -> output.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { },
-                                { e -> output.send(Signal.Upstream.Error(e)) },
+                                { issue -> output.send(Signal.Upstream.Error(issue)) },
                             )
                             if (remaining.decrementAndGet() == 0) output.close()
                         }
@@ -683,8 +677,8 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                     for ((_, groupInbox) in groupChannels) runCatching { groupInbox.send(Signal.Upstream.Complete) }
                     if (remaining.get() == 0) output.close()
                 },
-                { e ->
-                    for ((_, groupInbox) in groupChannels) runCatching { groupInbox.send(Signal.Upstream.Error(e)) }
+                { issue ->
+                    for ((_, groupInbox) in groupChannels) runCatching { groupInbox.send(Signal.Upstream.Error(issue)) }
                     if (remaining.get() == 0) output.close()
                 },
             )
@@ -706,7 +700,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
 /**
  * Drops upstream items that arrive when the downstream has no pending demand.
  *
- * Use this only when data loss is acceptable — e.g. high-frequency sensor readings where
+ * Use this only when data loss is acceptable — issue.g. high-frequency sensor readings where
  * only the latest values matter.
  */
 fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
@@ -723,8 +717,8 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
                     {
                         channel.send(Signal.Upstream.Complete)  // must not lose Complete
                     },
-                    { e ->
-                        channel.send(Signal.Upstream.Error(e))  // must not lose Error
+                    { issue ->
+                        channel.send(Signal.Upstream.Error(issue))  // must not lose Error
                     },
                 )
                 channel.close()
@@ -744,7 +738,7 @@ fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
         source(
             { value -> action(value); emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -753,7 +747,7 @@ fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { action(); emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -762,7 +756,7 @@ fun <T : Any> Many<T>.doOnError(action: (Exception) -> Unit): Many<T> =
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> action(e); emit(Signal.Upstream.Error(e)) },
+            { issue -> action(issue); emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -772,7 +766,7 @@ fun <T : Any> Many<T>.doOnSubscribe(action: () -> Unit): Many<T> =
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -789,7 +783,7 @@ fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
                 downstream
             },
             { action(Signal.Upstream.Complete); emit(Signal.Upstream.Complete) },
-            { e -> action(Signal.Upstream.Error(e)); emit(Signal.Upstream.Error(e)) },
+            { issue -> action(Signal.Upstream.Error(issue)); emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -803,7 +797,7 @@ fun <T : Any> Many<T>.recover(fallback: (Exception) -> Many<T>): Many<T> =
         if (result is Either.Left) fallback(result.value).source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
         else emit(Signal.Upstream.Complete)
     }
@@ -862,7 +856,7 @@ fun <T : Any> Many<T>.publishOn(context: CoroutineContext): Many<T> =
         source(
             { value -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Next(value)) } },
             { withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Complete) } },
-            { e -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Error(e)) } },
+            { issue -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Error(issue)) } },
         )
     }
 
@@ -876,7 +870,7 @@ fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
             source(
                 { value -> emit(Signal.Upstream.Next(value)) },
                 { emit(Signal.Upstream.Complete) },
-                { e -> emit(Signal.Upstream.Error(e)) },
+                { issue -> emit(Signal.Upstream.Error(issue)) },
             )
         }
     }
@@ -915,7 +909,7 @@ fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
         source(
             { value -> emit(Signal.Upstream.Next(transform(value))) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -926,12 +920,12 @@ fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
                 transform(value).source(
                     { inner -> emit(Signal.Upstream.Next(inner)) },
                     { emit(Signal.Upstream.Complete) },
-                    { e -> emit(Signal.Upstream.Error(e)) },
+                    { issue -> emit(Signal.Upstream.Error(issue)) },
                 )
                 Signal.Downstream.Cancel
             },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -942,12 +936,12 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
                 transform(value).source(
                     { inner -> emit(Signal.Upstream.Next(inner)) },
                     { emit(Signal.Upstream.Complete) },
-                    { e -> emit(Signal.Upstream.Error(e)) },
+                    { issue -> emit(Signal.Upstream.Error(issue)) },
                 )
                 Signal.Downstream.Cancel
             },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -961,7 +955,7 @@ fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
                 Signal.Downstream.Request
             },
             { },
-            { e -> throw e },
+            ::rethrow,
         )
     }
 
@@ -1008,7 +1002,7 @@ fun <T : Any> One<T>.doOnNext(action: (T) -> Unit): One<T> =
         source(
             { value -> action(value); emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -1017,7 +1011,7 @@ fun <T : Any> One<T>.doOnError(action: (Exception) -> Unit): One<T> =
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> action(e); emit(Signal.Upstream.Error(e)) },
+            { issue -> action(issue); emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -1034,7 +1028,7 @@ fun <T : Any> One<T>.doFinally(action: (Signal.Terminal) -> Unit): One<T> =
                 downstream
             },
             { action(Signal.Upstream.Complete); emit(Signal.Upstream.Complete) },
-            { e -> action(Signal.Upstream.Error(e)); emit(Signal.Upstream.Error(e)) },
+            { issue -> action(Signal.Upstream.Error(issue)); emit(Signal.Upstream.Error(issue)) },
         )
     }
 
@@ -1043,7 +1037,7 @@ fun <T : Any> One<T>.publishOn(context: CoroutineContext): One<T> =
         source(
             { value -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Next(value)) } },
             { withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Complete) } },
-            { e -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Error(e)) } },
+            { issue -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Error(issue)) } },
         )
     }
 
@@ -1053,7 +1047,7 @@ fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
             source(
                 { value -> emit(Signal.Upstream.Next(value)) },
                 { emit(Signal.Upstream.Complete) },
-                { e -> emit(Signal.Upstream.Error(e)) },
+                { issue -> emit(Signal.Upstream.Error(issue)) },
             )
         }
     }
@@ -1083,11 +1077,7 @@ suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
  * [Exception] if the source errored.
  */
 suspend fun <T : Any> One<T>.await(timeout: Duration): Either<Exception, T> =
-    try {
-        withTimeout(timeout) { await() }
-    } catch (e: TimeoutCancellationException) {
-        TimeoutException(timeout).left()
-    }
+    Either.catching(timeout) { await().rightOrThrow() }
 
 /**
  * Returns a [One] that executes the upstream source at most once and replays the result to every

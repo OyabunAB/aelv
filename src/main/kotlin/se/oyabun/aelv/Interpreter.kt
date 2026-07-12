@@ -133,7 +133,7 @@ internal suspend fun <T : Any> interpret(
     val todo = ArrayDeque<Work<*>>()
     todo.addLast(Work(RunSource.Pending(step), frame))
 
-    return try {
+    return Either.catching {
         while (todo.isNotEmpty()) {
             val work = todo.first() as Work<Any>
 
@@ -164,11 +164,7 @@ internal suspend fun <T : Any> interpret(
                 }
             }
         }
-        true.right()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        e.left()
+        true
     }
 }
 
@@ -229,19 +225,15 @@ private suspend fun execSuspend(
         is Step.FromFlow<*>      -> {
             val flow = (step as Step.FromFlow<Any>).flow
             { onNext, onComplete, _ ->
-                try {
-                    coroutineScope { flow.collect { if (onNext(it) == Signal.Downstream.Cancel) cancel() } }
-                    onComplete()
-                } catch (_: CancellationException) {}
+                flow.collectCancelling { onNext(it) != Signal.Downstream.Cancel }
+                onComplete()
             }
         }
         is Step.FromPublisher<*> -> {
             val publisher = (step as Step.FromPublisher<Any>).publisher
             { onNext, onComplete, _ ->
-                try {
-                    coroutineScope { publisher.asFlow().collect { if (onNext(it) == Signal.Downstream.Cancel) cancel() } }
-                    onComplete()
-                } catch (_: CancellationException) {}
+                publisher.asFlow().collectCancelling { onNext(it) != Signal.Downstream.Cancel }
+                onComplete()
             }
         }
         is Step.Never            -> { _, _, _ -> awaitCancellation() }

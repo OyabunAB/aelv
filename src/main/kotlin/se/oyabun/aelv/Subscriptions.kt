@@ -15,14 +15,13 @@
  */
 package se.oyabun.aelv
 
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import java.util.concurrent.Executors
@@ -43,6 +42,15 @@ private val sharedScope = CoroutineScope(dispatcher + SupervisorJob())
 
 private val noopJob: Job = Job().also { it.cancel() }
 
+internal fun <S> S.deliverSubscription(
+    subscriber: org.reactivestreams.Subscriber<*>,
+    cancel: () -> Unit,
+    onSubscribeComplete: () -> Unit,
+) where S : Subscription {
+    Either.catchingStrict { subscriber.onSubscribe(this) }
+        .fold(onLeft = { cancel() }, onRight = { onSubscribeComplete() })
+}
+
 internal class StreamSubscription<T : Any>(
     private val subscriber: Subscriber<in T>,
     private val source: suspend (
@@ -55,50 +63,53 @@ internal class StreamSubscription<T : Any>(
     private val log  = Logging.of<StreamSubscription<*>>()
     private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
-    private val demand     = AtomicLong(0L)
-    private val signal     = Channel<Unit>(Channel.UNLIMITED)
-    private val terminated = AtomicBoolean(false)
-    private val started    = AtomicBoolean(false)
-    private val producer   = AtomicReference(noopJob)
+    private val demand          = AtomicLong(0L)
+    private val signal          = Channel<Unit>(Channel.UNLIMITED)
+    private val subscribeGate   = Channel<Unit>(Channel.CONFLATED)
+    private val terminated      = AtomicBoolean(false)
+    private val started         = AtomicBoolean(false)
+    private val producer        = AtomicReference(noopJob)
+
+    internal fun onSubscribeComplete() {
+        subscribeGate.trySend(Unit)
+    }
 
     private fun start() {
         log.stream.subscribing(name)
-        val producerJob = sharedScope.launch {
-            yield() // ensure onSubscribe has returned before delivering any signals (RS §1.9)
-            try {
-                source(
-                    { value ->
-                        awaitDemand()
-                        if (terminated.get()) return@source Signal.Downstream.Cancel
-                        demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
-                        subscriber.onNext(value)
-                        if (terminated.get()) Signal.Downstream.Cancel
-                        else Signal.Downstream.Request
-                    },
-                    {
-                        if (terminated.compareAndSet(false, true)) {
-                            log.stream.completed(name)
-                            subscriber.onComplete()
-                        }
-                        shutdown()
-                    },
-                    { cause ->
-                        if (terminated.compareAndSet(false, true)) {
-                            log.stream.error(name, cause)
-                            subscriber.onError(cause)
-                        }
-                        shutdown()
-                    },
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (terminated.compareAndSet(false, true)) {
-                    log.stream.error(name, e)
-                    subscriber.onError(e)
-                }
-                shutdown()
+        val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+            if (terminated.compareAndSet(false, true)) {
+                val exception = if (throwable is Exception) throwable else RuntimeException(throwable)
+                log.stream.error(name, exception)
+                subscriber.onError(exception)
             }
+            shutdown()
+        }
+        val producerJob = sharedScope.launch(exceptionHandler) {
+            subscribeGate.receive()
+            source(
+                { value ->
+                    awaitDemand()
+                    if (terminated.get()) return@source Signal.Downstream.Cancel
+                    demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
+                    subscriber.onNext(value)
+                    if (terminated.get()) Signal.Downstream.Cancel
+                    else Signal.Downstream.Request
+                },
+                {
+                    if (terminated.compareAndSet(false, true)) {
+                        log.stream.completed(name)
+                        subscriber.onComplete()
+                    }
+                    shutdown()
+                },
+                { cause ->
+                    if (terminated.compareAndSet(false, true)) {
+                        log.stream.error(name, cause)
+                        subscriber.onError(cause)
+                    }
+                    shutdown()
+                },
+            )
         }
         producer.set(producerJob)
         if (terminated.get()) producerJob.cancel()
@@ -152,26 +163,29 @@ internal class CompletionSubscription(
     private val log  = Logging.of<CompletionSubscription>()
     private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
-    private val terminated = AtomicBoolean(false)
-    private val producer   = AtomicReference(noopJob)
+    private val subscribeGate = Channel<Unit>(Channel.CONFLATED)
+    private val terminated    = AtomicBoolean(false)
+    private val producer      = AtomicReference(noopJob)
+
+    internal fun onSubscribeComplete() {
+        subscribeGate.trySend(Unit)
+    }
 
     private fun start() {
         log.stream.subscribing(name)
-        val producerJob = sharedScope.launch {
-            yield() // ensure onSubscribe has returned before delivering any signals (RS §1.9)
-            try {
-                source()
-                if (terminated.compareAndSet(false, true)) {
-                    log.stream.completed(name)
-                    subscriber.onComplete()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (terminated.compareAndSet(false, true)) {
-                    log.stream.error(name, e)
-                    subscriber.onError(e)
-                }
+        val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+            if (terminated.compareAndSet(false, true)) {
+                val exception = if (throwable is Exception) throwable else RuntimeException(throwable)
+                log.stream.error(name, exception)
+                subscriber.onError(exception)
+            }
+        }
+        val producerJob = sharedScope.launch(exceptionHandler) {
+            subscribeGate.receive()
+            source()
+            if (terminated.compareAndSet(false, true)) {
+                log.stream.completed(name)
+                subscriber.onComplete()
             }
         }
         if (!producer.compareAndSet(noopJob, producerJob)) producerJob.cancel()

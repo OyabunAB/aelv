@@ -68,11 +68,8 @@ fun <T : Any> Many<T>.subscribe(
 
         override fun onError(t: Throwable) {
             val error = if (t is Exception) t else RuntimeException(t)
-            try {
-                onError(error)
-            } catch (e: Exception) {
-                log.stream.error("subscriber.onError", e)
-            }
+            Either.catchingStrict { onError(error) }
+                .onLeft { issue -> log.stream.error("subscriber.onError", issue) }
         }
 
         override fun onComplete() = onComplete()

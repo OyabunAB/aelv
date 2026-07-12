@@ -28,6 +28,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -76,19 +77,14 @@ class Many<T : Any> private constructor(
 
     override fun subscribe(subscriber: Subscriber<in T>) {
         val subscription = StreamSubscription(subscriber) { on, oc, oe -> source(on, oc, oe) }
-        try {
-            subscriber.onSubscribe(subscription)
-        } catch (e: Exception) {
-            subscription.cancel()
-            throw e
-        }
+        subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
     fun asFlow(): Flow<T> = flow {
         source(
             { value -> emit(value); Signal.Downstream.Request },
             { },
-            { e -> throw e },
+            ::rethrow,
         )
     }
 
@@ -105,16 +101,13 @@ class Many<T : Any> private constructor(
         if (currentFusion is Fusion.Available) {
             val coroutineContext  = currentCoroutineContext()
             val poll = currentFusion.create(coroutineContext)
-            if (poll != null) return try {
+            if (poll != null) return Either.catching {
                 while (true) {
                     when (val polled = poll.poll()) {
                         is Either.Left  -> break
-                        is Either.Right -> if (action(polled.value) == Signal.Downstream.Cancel) return Unit.right()
+                        is Either.Right -> if (action(polled.value) == Signal.Downstream.Cancel) break
                     }
                 }
-                Unit.right()
-            } catch (e: Exception) {
-                e.left()
             }
         }
         return when (val result = interpret(step, Frame.Collect(action))) {
@@ -127,7 +120,7 @@ class Many<T : Any> private constructor(
         val currentFusion = fusion
         if (currentFusion !is Fusion.Available) return null
         val poll = currentFusion.create(EmptyCoroutineContext) ?: return null
-        return try {
+        return Either.catchingStrict {
             var accumulator = initial
             while (true) {
                 when (val polled = poll.poll()) {
@@ -135,9 +128,7 @@ class Many<T : Any> private constructor(
                     is Either.Right -> accumulator = accumulate(accumulator, polled.value)
                 }
             }
-            accumulator.right()
-        } catch (e: Exception) {
-            e.left()
+            accumulator
         }
     }
 
@@ -226,8 +217,7 @@ class Many<T : Any> private constructor(
                     upstream.source(
                         { value ->
                             if (cancelled) return@source Signal.Downstream.Cancel
-                            semaphore.acquire()
-                            try {
+                            semaphore.withPermit {
                                 transform(value).source(
                                     { inner ->
                                         mutex.withLock {
@@ -240,15 +230,13 @@ class Many<T : Any> private constructor(
                                         }
                                     },
                                     {},
-                                    { e -> outerError.compareAndSet(Unset, e) },
+                                    { issue -> outerError.compareAndSet(Unset, issue) },
                                 )
-                            } finally {
-                                semaphore.release()
                             }
                             Signal.Downstream.Request
                         },
                         {},
-                        { e -> outerError.compareAndSet(Unset, e) },
+                        { issue -> outerError.compareAndSet(Unset, issue) },
                     )
                 }
                 val error = outerError.get()
@@ -273,19 +261,14 @@ class One<T : Any> private constructor(
 
     override fun subscribe(subscriber: Subscriber<in T>) {
         val subscription = StreamSubscription(subscriber, source)
-        try {
-            subscriber.onSubscribe(subscription)
-        } catch (e: Exception) {
-            subscription.cancel()
-            throw e
-        }
+        subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
     fun asFlow(): Flow<T> = flow {
         source(
             { value -> emit(value); Signal.Downstream.Request },
             { },
-            { e -> throw e },
+            ::rethrow,
         )
     }
 
@@ -293,23 +276,18 @@ class One<T : Any> private constructor(
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
-            { e -> emit(Signal.Upstream.Error(e)) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
         )
     }
 
     internal suspend fun collect(
         action: suspend (T) -> Signal.Downstream,
-    ): Either<Exception, Unit> = try {
+    ): Either<Exception, Unit> = Either.catching {
         source(
             { value -> action(value) },
             { },
-            { e -> throw e },
+            ::rethrow,
         )
-        Unit.right()
-    } catch (e: AelvException) {
-        e.left()
-    } catch (e: Exception) {
-        e.left()
     }
 
     companion object {
@@ -335,14 +313,7 @@ class One<T : Any> private constructor(
         }
 
         fun <T : Any> from(publisher: Publisher<T>): One<T> = One { onNext, onComplete, _ ->
-            try {
-                coroutineScope {
-                    publisher.asFlow().collect { value ->
-                        onNext(value)
-                        cancel()
-                    }
-                }
-            } catch (_: CancellationException) {}
+            publisher.asFlow().collectCancelling { value -> onNext(value); false }
             onComplete()
         }
 
@@ -359,10 +330,10 @@ class One<T : Any> private constructor(
 
         fun <T : Any> create(block: (success: (T) -> Unit, failure: (Exception) -> Unit) -> Unit): One<T> =
             One.generate { emit ->
-                val result = suspendCancellableCoroutine<Either<Exception, T>> { cont ->
+                val result = suspendCancellableCoroutine<Either<Exception, T>> { continuation ->
                     block(
-                        { value -> cont.resume(value.right()) },
-                        { cause -> cont.resume(cause.left()) },
+                        { value -> continuation.resume(value.right()) },
+                        { cause -> continuation.resume(cause.left()) },
                     )
                 }
                 when (result) {
@@ -382,32 +353,14 @@ class None<T : Any> private constructor(
 
     override fun subscribe(subscriber: Subscriber<in Nothing>) {
         val subscription = CompletionSubscription(subscriber, source)
-        try {
-            subscriber.onSubscribe(subscription)
-        } catch (e: Exception) {
-            subscription.cancel()
-            throw e
-        }
+        subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
-    suspend fun await(): Either<Exception, Unit> = try {
-        source()
-        Unit.right()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: AelvException) {
-        e.left()
-    } catch (e: Exception) {
-        e.left()
-    }
+    suspend fun await(): Either<Exception, Unit> = Either.catching { source() }
 
     companion object {
         fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> Unit): None<T> = None {
-            try {
-                if (context != null) withContext(context) { closure() } else closure()
-            } catch (e: CancellationException) { throw e
-            } catch (e: AelvException) { throw e
-            } catch (e: Exception) { throw e }
+            if (context != null) withContext(context) { closure() } else closure()
         }
 
         internal fun <T : Any> generate(closure: suspend () -> Unit): None<T> = None(closure)

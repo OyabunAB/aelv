@@ -58,10 +58,25 @@ sealed class Either<out A, out B> {
         is Right -> this
     }
 
+    /** Runs [block] with the [Left] value if this is a [Left], then returns [this] unchanged. */
+    inline fun onLeft(block: (A) -> Unit): Either<A, B> = also { if (it is Left) block(it.value) }
+
     /** Transforms the [Right] value with [transform], leaving [Left] unchanged. */
     inline fun <C> mapRight(transform: (B) -> C): Either<A, C> = when (this) {
         is Left -> this
         is Right -> Right(transform(value))
+    }
+
+    companion object {
+        internal suspend inline fun <T> catching(block: suspend () -> T): Either<Exception, T> =
+            try { block().right() } catch (issue: Exception) { issue.leftUnlessCancelled() }
+
+        internal inline fun <T> catchingStrict(block: () -> T): Either<Exception, T> =
+            try { block().right() } catch (issue: Exception) { issue.left() }
+
+        internal suspend fun <T> catching(timeout: kotlin.time.Duration, block: suspend () -> T): Either<Exception, T> =
+            try { catching { kotlinx.coroutines.withTimeout(timeout) { block() } } }
+            catch (issue: kotlinx.coroutines.TimeoutCancellationException) { TimeoutException(timeout).left() }
     }
 }
 
