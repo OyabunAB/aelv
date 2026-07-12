@@ -32,7 +32,7 @@ internal fun Any.asError(): Exception = this as Exception
 
 internal fun rethrow(issue: Exception): Nothing = throw issue
 
-internal fun Exception.leftUnlessCancelled(): Either<Exception, Nothing> =
+fun Exception.leftUnlessCancelled(): Either<Exception, Nothing> =
     if (this is CancellationException) throw this else this.left()
 
 internal suspend fun <T> Flow<T>.collectCancelling(block: suspend (T) -> Boolean) =

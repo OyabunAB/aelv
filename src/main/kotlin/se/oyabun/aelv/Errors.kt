@@ -68,10 +68,10 @@ sealed class Either<out A, out B> {
     }
 
     companion object {
-        internal suspend inline fun <T> catching(block: suspend () -> T): Either<Exception, T> =
+        suspend inline fun <T> catching(block: suspend () -> T): Either<Exception, T> =
             try { block().right() } catch (issue: Exception) { issue.leftUnlessCancelled() }
 
-        internal inline fun <T> catchingStrict(block: () -> T): Either<Exception, T> =
+        inline fun <T> catchingStrict(block: () -> T): Either<Exception, T> =
             try { block().right() } catch (issue: Exception) { issue.left() }
 
         internal suspend fun <T> catching(timeout: kotlin.time.Duration, block: suspend () -> T): Either<Exception, T> =
