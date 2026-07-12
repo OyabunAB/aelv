@@ -74,9 +74,10 @@ sealed class Either<out A, out B> {
         inline fun <T> catchingStrict(block: () -> T): Either<Exception, T> =
             try { block().right() } catch (issue: Exception) { issue.left() }
 
-        internal suspend fun <T> catching(timeout: kotlin.time.Duration, block: suspend () -> T): Either<Exception, T> =
-            try { catching { kotlinx.coroutines.withTimeout(timeout) { block() } } }
+        suspend fun <T> catching(timeout: kotlin.time.Duration, block: suspend () -> T): Either<Exception, T> =
+            try { kotlinx.coroutines.withTimeout(timeout) { block() }.right() }
             catch (issue: kotlinx.coroutines.TimeoutCancellationException) { TimeoutException(timeout).left() }
+            catch (issue: Exception) { if (issue is kotlinx.coroutines.CancellationException) throw issue; issue.left() }
     }
 }
 
