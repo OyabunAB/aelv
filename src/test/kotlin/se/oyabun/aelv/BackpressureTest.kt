@@ -329,7 +329,7 @@ class BackpressureTest {
                     .toList()
                     .await()
 
-                if (outcome is Either.Left) {
+                if (outcome is Failure) {
                     failIteration = i
                     failResult = outcome.value
                     break

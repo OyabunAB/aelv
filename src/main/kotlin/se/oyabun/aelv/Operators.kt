@@ -200,7 +200,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                     }
                 }
             }
-            if (result is Either.Left && !cancelled) {
+            if (result is Failure && !cancelled) {
                 cancelled = true
                 producerJob.cancel()
                 emit(Signal.Upstream.Error(result.value))
@@ -453,19 +453,19 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                     is Signal.Upstream.Error -> { emit(signal); terminated = true; break }
                     is Signal.Upstream.Complete -> break
                     is Signal.Upstream.Next -> when (val tagged = signal.value) {
-                        is Either.Left  -> {
+                        is Failure  -> {
                             latestA = tagged.value.right()
                             val capturedB = latestB
-                            if (capturedB is Either.Right) {
+                            if (capturedB is Success) {
                                 if (emit(Signal.Upstream.Next(transform(tagged.value, capturedB.value))) == Signal.Downstream.Cancel) {
                                     terminated = true; break
                                 }
                             }
                         }
-                        is Either.Right -> {
+                        is Success -> {
                             latestB = tagged.value.right()
                             val capturedA = latestA
-                            if (capturedA is Either.Right) {
+                            if (capturedA is Success) {
                                 if (emit(Signal.Upstream.Next(transform(capturedA.value, tagged.value))) == Signal.Downstream.Cancel) {
                                     terminated = true; break
                                 }
@@ -598,10 +598,10 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
             var terminated = false
             for (event in events) {
                 when (event) {
-                    is Either.Right -> {
+                    is Success -> {
                         if (!flushBucket()) { producerJob.cancel(); terminated = true; break }
                     }
-                    is Either.Left -> when (val signal = event.value) {
+                    is Failure -> when (val signal = event.value) {
                         is Signal.Upstream.Next -> {
                             if (bucket.isEmpty()) resetTimer()
                             bucket.add(signal.value)
@@ -794,7 +794,7 @@ fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
 fun <T : Any> Many<T>.recover(fallback: (Exception) -> Many<T>): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Either.Left) fallback(result.value).source(
+        if (result is Failure) fallback(result.value).source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
@@ -810,8 +810,8 @@ fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
         when (result) {
-            is Either.Right  -> emit(Signal.Upstream.Complete)
-            is Either.Left -> {
+            is Success  -> emit(Signal.Upstream.Complete)
+            is Failure -> {
                 if (emit(Signal.Upstream.Next(fallback(result.value))) != Signal.Downstream.Cancel)
                     emit(Signal.Upstream.Complete)
             }
@@ -832,7 +832,7 @@ fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
         while (true) {
             val result = collect { emit(Signal.Upstream.Next(it)) }
             when {
-                result is Either.Right                           -> break
+                result is Success                           -> break
                 !policy.filter((result as Either.Left).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
                 attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
@@ -883,17 +883,17 @@ fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R
     One.generate { emit ->
         var valueA: Either<Unset, A> = Unset.left()
         val resultA = a.collect { v -> valueA = v.right(); Signal.Downstream.Cancel }
-        if (resultA is Either.Left) { emit(Signal.Upstream.Error(resultA.value)); return@generate }
+        if (resultA is Failure) { emit(Signal.Upstream.Error(resultA.value)); return@generate }
         val finalA = valueA
         var valueB: Either<Unset, B> = Unset.left()
         val resultB = b.collect { v -> valueB = v.right(); Signal.Downstream.Cancel }
-        if (resultB is Either.Left) { emit(Signal.Upstream.Error(resultB.value)); return@generate }
+        if (resultB is Failure) { emit(Signal.Upstream.Error(resultB.value)); return@generate }
         val finalB = valueB
         when (finalA) {
-            is Either.Left  -> emit(Signal.Upstream.Complete)
-            is Either.Right -> when (finalB) {
-                is Either.Left  -> emit(Signal.Upstream.Complete)
-                is Either.Right -> {
+            is Failure  -> emit(Signal.Upstream.Complete)
+            is Success -> when (finalB) {
+                is Failure  -> emit(Signal.Upstream.Complete)
+                is Success -> {
                     if (emit(Signal.Upstream.Next(transform(finalA.value, finalB.value))) != Signal.Downstream.Cancel)
                         emit(Signal.Upstream.Complete)
                 }
@@ -951,7 +951,7 @@ fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
         source(
             { value ->
                 val innerResult = transform(value).await()
-                if (innerResult is Either.Left) { failed = true; throw innerResult.value }
+                if (innerResult is Failure) { failed = true; throw innerResult.value }
                 Signal.Downstream.Request
             },
             { },
@@ -963,7 +963,7 @@ fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
 fun <T : Any> One<T>.recover(fallback: (Exception) -> T): One<T> =
     One.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Either.Left) {
+        if (result is Failure) {
             if (emit(Signal.Upstream.Next(fallback(result.value))) == Signal.Downstream.Cancel) return@generate
         }
         emit(Signal.Upstream.Complete)
@@ -983,7 +983,7 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
         while (true) {
             val result = collect { emit(Signal.Upstream.Next(it)) }
             when {
-                result is Either.Right                           -> break
+                result is Success                           -> break
                 !policy.filter((result as Either.Left).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
                 attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
@@ -1063,8 +1063,8 @@ suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
     val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
     val final = result
     return when {
-        final  is Either.Right -> final.value.right()
-        outcome is Either.Left -> outcome
+        final  is Success -> final.value.right()
+        outcome is Failure -> outcome
         else                   -> NoSuchElementException().left()
     }
 }
@@ -1093,16 +1093,16 @@ fun <T : Any> One<T>.cache(): One<T> {
     return One.generate { emit ->
         val result: Either<Exception, T> = mutex.withLock {
             when (val cachedResult = cached) {
-                is Either.Left  -> await().also { cached = it.right() }
-                is Either.Right -> cachedResult.value
+                is Failure  -> await().also { cached = it.right() }
+                is Success -> cachedResult.value
             }
         }
         when (result) {
-            is Either.Right -> {
+            is Success -> {
                 if (emit(Signal.Upstream.Next(result.value)) != Signal.Downstream.Cancel)
                     emit(Signal.Upstream.Complete)
             }
-            is Either.Left  -> emit(Signal.Upstream.Error(result.value))
+            is Failure  -> emit(Signal.Upstream.Error(result.value))
         }
     }
 }

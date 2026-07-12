@@ -127,12 +127,12 @@ Many.of(...)
 
 ## Error handling
 
-All errors are `AelvException`. Terminal operations return `Either<T, AelvException>` — no exceptions thrown at call sites.
+Terminal operations return `Either<Exception, T>` — no exceptions thrown at call sites. `Failure` carries the error, `Success` carries the value.
 
 ```kotlin
-when (val result = stream.toList().get()) {
-    is Either.Left  -> process(result.value)
-    is Either.Right -> handleError(result.value)
+when (val result = stream.toList().await()) {
+    is Success -> process(result.value)
+    is Failure -> handleError(result.value)
 }
 ```
 

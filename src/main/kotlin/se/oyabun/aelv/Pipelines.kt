@@ -111,7 +111,7 @@ fun <T : Any, R : Any> Many<T>.then(next: None<R>): None<R> {
         }
         withContext(outerCtx + SourceSlot(leftDriven)) {
             val result = next.await()
-            if (result is Either.Left) throw result.value
+            if (result is Failure) throw result.value
         }
     }
 }

@@ -116,8 +116,8 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
                 .mapRight { accumulator }
         }
         when (result) {
-            is Either.Right  -> { emit(Signal.Upstream.Next(result.value)); emit(Signal.Upstream.Complete) }
-            is Either.Left -> emit(Signal.Upstream.Error(result.value))
+            is Success  -> { emit(Signal.Upstream.Next(result.value)); emit(Signal.Upstream.Complete) }
+            is Failure -> emit(Signal.Upstream.Error(result.value))
         }
     }
 
@@ -132,17 +132,17 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
         var accumulator: Either<Unset, T> = Unset.left()
         val result = collect { item ->
             accumulator = when (val current = accumulator) {
-                is Either.Left  -> item.right()
-                is Either.Right -> accumulate(current.value, item).right()
+                is Failure  -> item.right()
+                is Success -> accumulate(current.value, item).right()
             }
             Signal.Downstream.Request
         }
         val final = accumulator
         when (result) {
-            is Either.Left  -> emit(Signal.Upstream.Error(result.value))
-            is Either.Right -> when (final) {
-                is Either.Left  -> emit(Signal.Upstream.Error(NoSuchElementException()))
-                is Either.Right -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
+            is Failure  -> emit(Signal.Upstream.Error(result.value))
+            is Success -> when (final) {
+                is Failure  -> emit(Signal.Upstream.Error(NoSuchElementException()))
+                is Success -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
             }
         }
     }
@@ -156,8 +156,8 @@ fun <T : Any> Many<T>.toList(): One<List<T>> =
             collect { value -> result.add(value); Signal.Downstream.Request }.mapRight { result }
         }
         when (outcome) {
-            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value.toList())); emit(Signal.Upstream.Complete) }
-            is Either.Left -> emit(Signal.Upstream.Error(outcome.value))
+            is Success  -> { emit(Signal.Upstream.Next(outcome.value.toList())); emit(Signal.Upstream.Complete) }
+            is Failure -> emit(Signal.Upstream.Error(outcome.value))
         }
     }
 
@@ -170,8 +170,8 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
             collect { value -> result.add(value); Signal.Downstream.Request }.mapRight { result }
         }
         when (outcome) {
-            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value.toSet())); emit(Signal.Upstream.Complete) }
-            is Either.Left -> emit(Signal.Upstream.Error(outcome.value))
+            is Success  -> { emit(Signal.Upstream.Next(outcome.value.toSet())); emit(Signal.Upstream.Complete) }
+            is Failure -> emit(Signal.Upstream.Error(outcome.value))
         }
     }
 
@@ -186,8 +186,8 @@ suspend fun <T : Any> Many<T>.first(): Either<Exception, T> {
     val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
     val final = result
     return when {
-        final  is Either.Right -> final.value.right()
-        outcome is Either.Left -> outcome
+        final  is Success -> final.value.right()
+        outcome is Failure -> outcome
         else                   -> NoSuchElementException().left()
     }
 }
@@ -203,8 +203,8 @@ suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
     val outcome = collect { value -> result = value.right(); Signal.Downstream.Request }
     val final = result
     return when {
-        final  is Either.Right -> final.value.right()
-        outcome is Either.Left -> outcome
+        final  is Success -> final.value.right()
+        outcome is Failure -> outcome
         else                   -> NoSuchElementException().left()
     }
 }

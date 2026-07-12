@@ -221,7 +221,7 @@ class OperatorsTest {
             val result = zip(sourceA, Many.items("a")) { n, s -> "$n$s" }.toList().await()
             // Either completes with ["1a"] or surfaces the error from A — either is acceptable.
             // What must NOT happen is a hang.
-            assertTrue(result is Either.Right || result is Either.Left)
+            assertTrue(result is Success || result is Failure)
         }
     }
 

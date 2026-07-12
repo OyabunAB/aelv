@@ -85,13 +85,16 @@ fun <B> B.right(): Either<Nothing, B> = Either.Right(this)
 /** Wraps this value as [Either.Left] — the error side. */
 fun <A> A.left(): Either<A, Nothing> = Either.Left(this)
 
+typealias Success<T> = Either.Right<T>
+typealias Failure<E> = Either.Left<E>
+
 /**
  * Returns the [Right] value, or throws the [Left] value if it is a [Throwable],
  * otherwise throws [IllegalStateException].
  */
 fun <A : Throwable, B> Either<A, B>.rightOrThrow(): B = when (this) {
-    is Either.Right -> value
-    is Either.Left  -> throw value
+    is Success -> value
+    is Failure  -> throw value
 }
 
 /**

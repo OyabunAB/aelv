@@ -70,8 +70,8 @@ class Many<T : Any> private constructor(
         onError: suspend (Exception) -> Unit,
     ) {
         when (val result = interpret(step, Frame.Collect(onNext))) {
-            is Either.Right -> if (result.value) onComplete()
-            is Either.Left  -> onError(result.value)
+            is Success -> if (result.value) onComplete()
+            is Failure  -> onError(result.value)
         }
     }
 
@@ -104,15 +104,15 @@ class Many<T : Any> private constructor(
             if (poll != null) return Either.catching {
                 while (true) {
                     when (val polled = poll.poll()) {
-                        is Either.Left  -> break
-                        is Either.Right -> if (action(polled.value) == Signal.Downstream.Cancel) break
+                        is Failure  -> break
+                        is Success -> if (action(polled.value) == Signal.Downstream.Cancel) break
                     }
                 }
             }
         }
         return when (val result = interpret(step, Frame.Collect(action))) {
-            is Either.Right -> Unit.right()   // both completed and cancelled are "ok" for collect
-            is Either.Left  -> result.value.left()
+            is Success -> Unit.right()   // both completed and cancelled are "ok" for collect
+            is Failure  -> result.value.left()
         }
     }
 
@@ -124,8 +124,8 @@ class Many<T : Any> private constructor(
             var accumulator = initial
             while (true) {
                 when (val polled = poll.poll()) {
-                    is Either.Left  -> break
-                    is Either.Right -> accumulator = accumulate(accumulator, polled.value)
+                    is Failure  -> break
+                    is Success -> accumulator = accumulate(accumulator, polled.value)
                 }
             }
             accumulator
@@ -337,11 +337,11 @@ class One<T : Any> private constructor(
                     )
                 }
                 when (result) {
-                    is Either.Right -> {
+                    is Success -> {
                         if (emit(Signal.Upstream.Next(result.value)) != Signal.Downstream.Cancel)
                             emit(Signal.Upstream.Complete)
                     }
-                    is Either.Left -> emit(Signal.Upstream.Error(result.value))
+                    is Failure -> emit(Signal.Upstream.Error(result.value))
                 }
             }
     }
@@ -378,7 +378,7 @@ class None<T : Any> private constructor(
             val source = currentCoroutineContext()[SourceSlot]?.publisher as? None<T>
                 ?: error("None.pipelineFrom() executed without a bound source — use applyTo() or then()")
             val result = source.await()
-            if (result is Either.Left) throw result.value
+            if (result is Failure) throw result.value
         }
     }
 }
@@ -410,8 +410,8 @@ internal class MapFusion<T : Any, R : Any>(
     override fun create(context: CoroutineContext): Fusion.Available<R>? =
         upstream.create(context)?.let { MapFusion(it, transform) }
     override fun poll(): Either<Unset, R> = when (val polled = upstream.poll()) {
-        is Either.Left  -> polled
-        is Either.Right -> transform(polled.value).right()
+        is Failure  -> polled
+        is Success -> transform(polled.value).right()
     }
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<R> {
         val connected = this.upstream.connectSource(upstream)
@@ -428,8 +428,8 @@ internal class FilterFusion<T : Any>(
     override fun poll(): Either<Unset, T> {
         while (true) {
             when (val polled = upstream.poll()) {
-                is Either.Left  -> return polled
-                is Either.Right -> if (predicate(polled.value)) return polled
+                is Failure  -> return polled
+                is Success -> if (predicate(polled.value)) return polled
             }
         }
     }
@@ -449,8 +449,8 @@ internal class TakeFusion<T : Any>(
     override fun poll(): Either<Unset, T> {
         if (remaining == 0L) return Unset.left()
         return when (val polled = upstream.poll()) {
-            is Either.Left  -> polled
-            is Either.Right -> { remaining--; polled }
+            is Failure  -> polled
+            is Success -> { remaining--; polled }
         }
     }
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<T> {
