@@ -59,8 +59,8 @@ fun <T : Any> Many<T>.subscribe(
             onNext(t)
             if (++consumed >= threshold) {
                 consumed = 0L
-                when (val s = subscription) {
-                    is SubscriptionState.Bound   -> s.sub.request(threshold)
+                when (val state = subscription) {
+                    is SubscriptionState.Bound   -> state.subscription.request(threshold)
                     is SubscriptionState.Unbound -> Unit
                 }
             }
@@ -78,8 +78,8 @@ fun <T : Any> Many<T>.subscribe(
         override fun onComplete() = onComplete()
     })
     return object : Disposable {
-        override fun cancel() = when (val s = subscription) {
-            is SubscriptionState.Bound   -> s.sub.cancel()
+        override fun cancel() = when (val state = subscription) {
+            is SubscriptionState.Bound   -> state.subscription.cancel()
             is SubscriptionState.Unbound -> Unit
         }
     }
@@ -114,9 +114,9 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
     One.generate { emit ->
         val fused = collectInto(initial, accumulate)
         val result = fused ?: run {
-            var acc = initial
-            collect { value -> acc = accumulate(acc, value); Signal.Downstream.Request }
-                .mapRight { acc }
+            var accumulator = initial
+            collect { value -> accumulator = accumulate(accumulator, value); Signal.Downstream.Request }
+                .mapRight { accumulator }
         }
         when (result) {
             is Either.Right  -> { emit(Signal.Upstream.Next(result.value)); emit(Signal.Upstream.Complete) }
@@ -132,19 +132,20 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
  */
 fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
     One.generate { emit ->
-        var acc: Any = Unset
+        var accumulator: Either<Unset, T> = Unset.left()
         val result = collect { item ->
-            @Suppress("UNCHECKED_CAST")
-            acc = if (acc === Unset) item else accumulate(acc as T, item)
+            accumulator = when (val current = accumulator) {
+                is Either.Left  -> item.right()
+                is Either.Right -> accumulate(current.value, item).right()
+            }
             Signal.Downstream.Request
         }
-        when {
-            result is Either.Left -> emit(Signal.Upstream.Error(result.value))
-            acc === Unset          -> emit(Signal.Upstream.Error(NoSuchElementException()))
-            else                   -> {
-                @Suppress("UNCHECKED_CAST")
-                emit(Signal.Upstream.Next(acc as T))
-                emit(Signal.Upstream.Complete)
+        val final = accumulator
+        when (result) {
+            is Either.Left  -> emit(Signal.Upstream.Error(result.value))
+            is Either.Right -> when (final) {
+                is Either.Left  -> emit(Signal.Upstream.Error(NoSuchElementException()))
+                is Either.Right -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
             }
         }
     }
@@ -152,13 +153,13 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
 /** Collects all items into an immutable [List]. */
 fun <T : Any> Many<T>.toList(): One<List<T>> =
     One.generate { emit ->
-        val fused = collectInto(mutableListOf<T>()) { acc, item -> acc.also { it.add(item) } }
+        val fused = collectInto(mutableListOf<T>()) { accumulator, item -> accumulator.also { it.add(item) } }
         val outcome = fused ?: run {
             val result = mutableListOf<T>()
             collect { value -> result.add(value); Signal.Downstream.Request }.mapRight { result }
         }
         when (outcome) {
-            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value as List<T>)); emit(Signal.Upstream.Complete) }
+            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value.toList())); emit(Signal.Upstream.Complete) }
             is Either.Left -> emit(Signal.Upstream.Error(outcome.value))
         }
     }
@@ -166,13 +167,13 @@ fun <T : Any> Many<T>.toList(): One<List<T>> =
 /** Collects all items into an immutable [Set], removing duplicates. */
 fun <T : Any> Many<T>.toSet(): One<Set<T>> =
     One.generate { emit ->
-        val fused = collectInto(mutableSetOf<T>()) { acc, item -> acc.also { it.add(item) } }
+        val fused = collectInto(mutableSetOf<T>()) { accumulator, item -> accumulator.also { it.add(item) } }
         val outcome = fused ?: run {
             val result = mutableSetOf<T>()
             collect { value -> result.add(value); Signal.Downstream.Request }.mapRight { result }
         }
         when (outcome) {
-            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value as Set<T>)); emit(Signal.Upstream.Complete) }
+            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value.toSet())); emit(Signal.Upstream.Complete) }
             is Either.Left -> emit(Signal.Upstream.Error(outcome.value))
         }
     }
@@ -184,18 +185,13 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
  * if the stream was empty, or with the upstream error if the stream errored.
  */
 suspend fun <T : Any> Many<T>.first(): Either<Exception, T> {
-    var result: Any = Unset
-    val outcome = collect { value ->
-        result = value
-        Signal.Downstream.Cancel
-    }
+    var result: Either<Unset, T> = Unset.left()
+    val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
+    val final = result
     return when {
-        result !== Unset        -> {
-            @Suppress("UNCHECKED_CAST")
-            (result as T).right()
-        }
+        final  is Either.Right -> final.value.right()
         outcome is Either.Left -> outcome
-        else                    -> NoSuchElementException().left()
+        else                   -> NoSuchElementException().left()
     }
 }
 
@@ -206,17 +202,12 @@ suspend fun <T : Any> Many<T>.first(): Either<Exception, T> {
  * if the stream was empty, or with the upstream error if the stream errored.
  */
 suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
-    var result: Any = Unset
-    val outcome = collect { value ->
-        result = value
-        Signal.Downstream.Request
-    }
+    var result: Either<Unset, T> = Unset.left()
+    val outcome = collect { value -> result = value.right(); Signal.Downstream.Request }
+    val final = result
     return when {
-        result !== Unset        -> {
-            @Suppress("UNCHECKED_CAST")
-            (result as T).right()
-        }
+        final  is Either.Right -> final.value.right()
         outcome is Either.Left -> outcome
-        else                    -> NoSuchElementException().left()
+        else                   -> NoSuchElementException().left()
     }
 }

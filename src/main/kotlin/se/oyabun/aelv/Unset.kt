@@ -17,5 +17,8 @@ package se.oyabun.aelv
 
 internal object Unset
 
+internal fun Any.isUnset(): Boolean  = this === Unset
+internal fun Any.notUnset(): Boolean = this !== Unset
+
 internal fun Any.isError(): Boolean = this is Exception
 internal fun Any.asError(): Exception = this as Exception

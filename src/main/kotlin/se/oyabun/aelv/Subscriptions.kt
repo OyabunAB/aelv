@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 internal sealed interface SubscriptionState {
     data object Unbound                      : SubscriptionState
-    data class  Bound(val sub: Subscription) : SubscriptionState
+    data class  Bound(val subscription: Subscription) : SubscriptionState
 }
 
 private val dispatcher = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()) { r ->
@@ -39,6 +39,8 @@ private val dispatcher = Executors.newFixedThreadPool(Runtime.getRuntime().avail
 }.asCoroutineDispatcher()
 
 private val sharedScope = CoroutineScope(dispatcher + SupervisorJob())
+
+private val noopJob: Job = Job().also { it.cancel() }
 
 internal class StreamSubscription<T : Any>(
     private val subscriber: Subscriber<in T>,
@@ -56,11 +58,11 @@ internal class StreamSubscription<T : Any>(
     private val signal     = Channel<Unit>(Channel.UNLIMITED)
     private val terminated = AtomicBoolean(false)
     private val started    = AtomicBoolean(false)
-    private val producer   = AtomicReference<Any>(Unset)
+    private val producer   = AtomicReference(noopJob)
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = sharedScope.launch {
+        val producerJob = sharedScope.launch {
             try {
                 source(
                     { value ->
@@ -96,8 +98,8 @@ internal class StreamSubscription<T : Any>(
                 shutdown()
             }
         }
-        producer.set(job)
-        if (terminated.get()) job.cancel()
+        producer.set(producerJob)
+        if (terminated.get()) producerJob.cancel()
     }
 
     private fun shutdown() {
@@ -107,7 +109,7 @@ internal class StreamSubscription<T : Any>(
     override fun request(n: Long) {
         if (n <= 0L) {
             if (terminated.compareAndSet(false, true)) {
-                val j = producer.get(); if (j !== Unset) (j as Job).cancel()
+                producer.get().cancel()
                 subscriber.onError(InvalidDemandException(n))
                 shutdown()
             }
@@ -124,15 +126,15 @@ internal class StreamSubscription<T : Any>(
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
             log.stream.cancelled(name)
-            val j = producer.get(); if (j !== Unset) (j as Job).cancel()
+            producer.get().cancel()
             shutdown()
         }
     }
 
     private suspend fun awaitDemand() {
         while (!terminated.get()) {
-            val d = demand.get()
-            if (d == Long.MAX_VALUE || d > 0L) return
+            val currentDemand = demand.get()
+            if (currentDemand == Long.MAX_VALUE || currentDemand > 0L) return
             log.subscription.backpressure(name)
             val result = signal.receiveCatching()
             if (result.isClosed) return
@@ -149,11 +151,11 @@ internal class CompletionSubscription(
     private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
     private val terminated = AtomicBoolean(false)
-    private val producer   = AtomicReference<Any>(Unset)
+    private val producer   = AtomicReference(noopJob)
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = sharedScope.launch {
+        val producerJob = sharedScope.launch {
             try {
                 source()
                 if (terminated.compareAndSet(false, true)) {
@@ -169,13 +171,13 @@ internal class CompletionSubscription(
                 }
             }
         }
-        if (!producer.compareAndSet(Unset, job)) job.cancel()
+        if (!producer.compareAndSet(noopJob, producerJob)) producerJob.cancel()
     }
 
     override fun request(n: Long) {
         if (n <= 0L) {
             if (terminated.compareAndSet(false, true)) {
-                val j = producer.get(); if (j !== Unset) (j as Job).cancel()
+                producer.get().cancel()
                 subscriber.onError(InvalidDemandException(n))
             }
             return
@@ -187,7 +189,7 @@ internal class CompletionSubscription(
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
             log.stream.cancelled(name)
-            val j = producer.get(); if (j !== Unset) (j as Job).cancel()
+            producer.get().cancel()
         }
     }
 }

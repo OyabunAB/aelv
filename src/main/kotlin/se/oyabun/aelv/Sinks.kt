@@ -50,27 +50,27 @@ sealed class Sink<T : Any>(
     suspend fun emit(value: T) {
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
-            if (terminal.get() !== Unset) return
+            if (terminal.get().notUnset()) return
             if (historySize > 0) {
                 history.addLast(signal)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
         }
-        for (ch in subscribers) {
-            try { ch.send(signal) } catch (_: ClosedSendChannelException) {}
+        for (inbox in subscribers) {
+            try { inbox.send(signal) } catch (_: ClosedSendChannelException) {}
         }
     }
 
     fun tryEmit(value: T): Boolean {
-        if (terminal.get() !== Unset) return false
+        if (terminal.get().notUnset()) return false
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
             if (historySize > 0) {
                 history.addLast(signal)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
-            for (ch in subscribers) {
-                if (!ch.trySend(signal).isSuccess) return false
+            for (inbox in subscribers) {
+                if (!inbox.trySend(signal).isSuccess) return false
             }
         }
         return true
@@ -82,47 +82,47 @@ sealed class Sink<T : Any>(
 
     private fun terminate(signal: Signal.Upstream<T>) {
         if (!terminal.compareAndSet(Unset, signal)) return
-        for (ch in subscribers) {
-            ch.trySend(signal)
-            ch.close()
+        for (inbox in subscribers) {
+            inbox.trySend(signal)
+            inbox.close()
         }
     }
 
     fun asMany(): Many<T> = Many.generate { emit ->
-        val ch = Channel<Signal.Upstream<T>>(bufferSize)
+        val inbox = Channel<Signal.Upstream<T>>(bufferSize)
         val replay = lock.withLock {
-            subscribers.add(ch)
+            subscribers.add(inbox)
             history.toList()
         }
         for (item in replay) {
             if (emit(item) == Signal.Downstream.Cancel) {
-                subscribers.remove(ch)
+                subscribers.remove(inbox)
                 return@generate
             }
         }
-        val t = terminal.get()
-        if (t !== Unset) {
-            subscribers.remove(ch)
-            when (t) {
+        val terminalState = terminal.get()
+        if (terminalState.notUnset()) {
+            subscribers.remove(inbox)
+            when (terminalState) {
                 is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
-                is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(t.cause))
+                is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(terminalState.cause))
                 else                        -> {}
             }
             return@generate
         }
         try {
-            for (signal in ch) {
+            for (signal in inbox) {
                 if (emit(signal) == Signal.Downstream.Cancel) break
             }
         } finally {
-            subscribers.remove(ch)
+            subscribers.remove(inbox)
         }
     }
 
     fun asOne(): One<T> = One.generate { emit ->
-        val ch = Channel<Signal.Upstream<T>>(bufferSize)
+        val inbox = Channel<Signal.Upstream<T>>(bufferSize)
         val replay = lock.withLock {
-            subscribers.add(ch)
+            subscribers.add(inbox)
             history.toList()
         }
         try {
@@ -131,23 +131,23 @@ sealed class Sink<T : Any>(
                 emit(Signal.Upstream.Complete)
                 return@generate
             }
-            val t = terminal.get()
-            if (t !== Unset) {
-                when (t) {
+            val terminalState = terminal.get()
+            if (terminalState.notUnset()) {
+                when (terminalState) {
                     is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
-                    is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(t.cause))
+                    is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(terminalState.cause))
                     else                        -> {}
                 }
                 return@generate
             }
-            for (signal in ch) {
+            for (signal in inbox) {
                 when {
                     signal is Signal.Upstream.Next -> { emit(signal); emit(Signal.Upstream.Complete); return@generate }
                     else -> { emit(signal); return@generate }
                 }
             }
         } finally {
-            subscribers.remove(ch)
+            subscribers.remove(inbox)
         }
     }
 }
@@ -165,11 +165,11 @@ class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) : Sink<T>(
 )
 
 /** Buffers the last [n] items; late subscribers receive recent history then live items. */
-class ReplayLastSink<T : Any>(val n: Int, bufferSize: Int = DEFAULT_BUFFER) : Sink<T>(
-    historySize = n,
+class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER) : Sink<T>(
+    historySize = count,
     bufferSize  = bufferSize,
 ) {
-    init { require(n > 0) { "ReplayLastSink requires n > 0, got $n" } }
+    init { require(count > 0) { "ReplayLastSink requires count > 0, got $count" } }
 }
 
 object Sinks {

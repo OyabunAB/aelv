@@ -21,7 +21,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.reactive.asFlow as publisherAsFlow
+import kotlinx.coroutines.reactive.asFlow
 import org.reactivestreams.Publisher
 
 internal sealed class Step<out T : Any> {
@@ -32,7 +32,7 @@ internal sealed class Step<out T : Any> {
     class Error(val cause: Exception)                                                                  : Step<Nothing>()
     object Never                                                                                       : Step<Nothing>()
     class FromFlow<T : Any>(val flow: Flow<T>)                                                        : Step<T>()
-    class FromPublisher<T : Any>(val pub: Publisher<T>)                                               : Step<T>()
+    class FromPublisher<T : Any>(val publisher: Publisher<T>)                                               : Step<T>()
     class Defer<T : Any>(val factory: () -> Many<T>)                                                  : Step<T>()
     class PipelineSource<T : Any>                                                                      : Step<T>()
     /** Escape hatch for async operators (interval, buffer, …). Not stack-safe for recursive use. */
@@ -236,10 +236,10 @@ private suspend fun execSuspend(
             }
         }
         is Step.FromPublisher<*> -> {
-            val pub = (step as Step.FromPublisher<Any>).pub
+            val publisher = (step as Step.FromPublisher<Any>).publisher
             { onNext, onComplete, _ ->
                 try {
-                    coroutineScope { pub.publisherAsFlow().collect { if (onNext(it) == Signal.Downstream.Cancel) cancel() } }
+                    coroutineScope { publisher.asFlow().collect { if (onNext(it) == Signal.Downstream.Cancel) cancel() } }
                     onComplete()
                 } catch (_: CancellationException) {}
             }

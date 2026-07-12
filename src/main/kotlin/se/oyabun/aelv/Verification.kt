@@ -109,8 +109,8 @@ class Verify<T : Any> private constructor(
                 is Step.IsSubscribed  -> Unit
                 is Step.Runs          -> step.action()
                 is Step.ThenCancels   -> {
-                    when (val s = subscription) {
-                        is SubscriptionState.Bound   -> s.sub.cancel()
+                    when (val state = subscription) {
+                        is SubscriptionState.Bound   -> state.subscription.cancel()
                         is SubscriptionState.Unbound -> Unit
                     }
                     terminal = Cancel; break

@@ -23,7 +23,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.reactive.asFlow as publisherAsFlow
+import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -103,8 +103,8 @@ class Many<T : Any> private constructor(
     ): Either<Exception, Unit> {
         val currentFusion = fusion
         if (currentFusion is Fusion.Available) {
-            val ctx  = currentCoroutineContext()
-            val poll = currentFusion.create(ctx)
+            val coroutineContext  = currentCoroutineContext()
+            val poll = currentFusion.create(coroutineContext)
             if (poll != null) return try {
                 while (true) {
                     when (val polled = poll.poll()) {
@@ -128,14 +128,14 @@ class Many<T : Any> private constructor(
         if (currentFusion !is Fusion.Available) return null
         val poll = currentFusion.create(EmptyCoroutineContext) ?: return null
         return try {
-            var acc = initial
+            var accumulator = initial
             while (true) {
                 when (val polled = poll.poll()) {
                     is Either.Left  -> break
-                    is Either.Right -> acc = accumulate(acc, polled.value)
+                    is Either.Right -> accumulator = accumulate(accumulator, polled.value)
                 }
             }
-            acc.right()
+            accumulator.right()
         } catch (e: Exception) {
             e.left()
         }
@@ -337,7 +337,7 @@ class One<T : Any> private constructor(
         fun <T : Any> from(publisher: Publisher<T>): One<T> = One { onNext, onComplete, _ ->
             try {
                 coroutineScope {
-                    publisher.publisherAsFlow().collect { value ->
+                    publisher.asFlow().collect { value ->
                         onNext(value)
                         cancel()
                     }
@@ -413,7 +413,7 @@ class None<T : Any> private constructor(
         internal fun <T : Any> generate(closure: suspend () -> Unit): None<T> = None(closure)
 
         fun <T : Any> from(publisher: Publisher<T>): None<T> = None {
-            publisher.publisherAsFlow().collect { }
+            publisher.asFlow().collect { }
         }
 
         fun <T : Any> complete(): None<T> = None { }

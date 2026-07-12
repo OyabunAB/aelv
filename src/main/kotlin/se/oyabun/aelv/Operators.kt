@@ -120,8 +120,8 @@ fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
         var lastKey: Any = Unset
         source(
             { value ->
-                val k = key(value)
-                if (k != lastKey) { lastKey = k; onNext(value) } else Signal.Downstream.Request
+                val itemKey = key(value)
+                if (itemKey != lastKey) { lastKey = itemKey; onNext(value) } else Signal.Downstream.Request
             },
             onComplete,
             onError,
@@ -426,7 +426,6 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
  * Emits a combined value whenever either [a] or [b] emits, using the most recent value from the
  * other source.  Does not emit until both sources have emitted at least one item.
  */
-@Suppress("UNCHECKED_CAST")
 fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
     Many.generate { emit ->
         // Channel carries tagged values (Left = from a, Right = from b) plus errors.
@@ -452,8 +451,8 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                 jobB.join()
                 channel.close()
             }
-            var latestA: Any = Unset
-            var latestB: Any = Unset
+            var latestA: Either<Unset, A> = Unset.left()
+            var latestB: Either<Unset, B> = Unset.left()
             var terminated = false
             for (signal in channel) {
                 when (signal) {
@@ -461,17 +460,19 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                     is Signal.Upstream.Complete -> break
                     is Signal.Upstream.Next -> when (val tagged = signal.value) {
                         is Either.Left  -> {
-                            latestA = tagged.value
-                            if (latestB !== Unset) {
-                                if (emit(Signal.Upstream.Next(transform(tagged.value, latestB as B))) == Signal.Downstream.Cancel) {
+                            latestA = tagged.value.right()
+                            val capturedB = latestB
+                            if (capturedB is Either.Right) {
+                                if (emit(Signal.Upstream.Next(transform(tagged.value, capturedB.value))) == Signal.Downstream.Cancel) {
                                     terminated = true; break
                                 }
                             }
                         }
                         is Either.Right -> {
-                            latestB = tagged.value
-                            if (latestA !== Unset) {
-                                if (emit(Signal.Upstream.Next(transform(latestA as A, tagged.value))) == Signal.Downstream.Cancel) {
+                            latestB = tagged.value.right()
+                            val capturedA = latestA
+                            if (capturedA is Either.Right) {
+                                if (emit(Signal.Upstream.Next(transform(capturedA.value, tagged.value))) == Signal.Downstream.Cancel) {
                                     terminated = true; break
                                 }
                             }
@@ -648,48 +649,48 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
     groupHandler: (key: K, group: Many<T>) -> Many<R>,
 ): Many<R> = Many.generate { emit ->
     val groupChannels = mutableMapOf<K, Channel<Signal.Upstream<T>>>()
-    val out           = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
+    val output = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
     val remaining     = AtomicInteger(0)
     coroutineScope {
         val producerJob = launch {
             source(
                 { value ->
                     val key = keySelector(value)
-                    val ch  = groupChannels.getOrPut(key) {
-                        val newCh = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
+                    val groupInbox  = groupChannels.getOrPut(key) {
+                        val newGroupInbox = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
                         remaining.incrementAndGet()
                         launch {
                             val groupMany = Many.generate<T> { groupEmit ->
-                                for (upstream in newCh) {
+                                for (upstream in newGroupInbox) {
                                     if (groupEmit(upstream) == Signal.Downstream.Cancel) {
-                                        newCh.cancel(); break
+                                        newGroupInbox.cancel(); break
                                     }
                                 }
                             }
                             groupHandler(key, groupMany).source(
-                                { inner -> out.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
+                                { inner -> output.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { },
-                                { e -> out.send(Signal.Upstream.Error(e)) },
+                                { e -> output.send(Signal.Upstream.Error(e)) },
                             )
-                            if (remaining.decrementAndGet() == 0) out.close()
+                            if (remaining.decrementAndGet() == 0) output.close()
                         }
-                        newCh
+                        newGroupInbox
                     }
-                    ch.send(Signal.Upstream.Next(value))
+                    groupInbox.send(Signal.Upstream.Next(value))
                     Signal.Downstream.Request
                 },
                 {
-                    for ((_, ch) in groupChannels) runCatching { ch.send(Signal.Upstream.Complete) }
-                    if (remaining.get() == 0) out.close()
+                    for ((_, groupInbox) in groupChannels) runCatching { groupInbox.send(Signal.Upstream.Complete) }
+                    if (remaining.get() == 0) output.close()
                 },
                 { e ->
-                    for ((_, ch) in groupChannels) runCatching { ch.send(Signal.Upstream.Error(e)) }
-                    if (remaining.get() == 0) out.close()
+                    for ((_, groupInbox) in groupChannels) runCatching { groupInbox.send(Signal.Upstream.Error(e)) }
+                    if (remaining.get() == 0) output.close()
                 },
             )
         }
         var terminated = false
-        for (signal in out) {
+        for (signal in output) {
             when (signal) {
                 is Signal.Upstream.Next     -> if (emit(signal) == Signal.Downstream.Cancel) {
                     producerJob.cancel(); terminated = true; break
@@ -842,8 +843,8 @@ fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
                 attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
                     log.operator.retrying("retry", attempts, result.value)
-                    val d = policy.backoff.delayFor(attempts)
-                    if (d.isPositive()) delay(d)
+                    val backoffDelay = policy.backoff.delayFor(attempts)
+                    if (backoffDelay.isPositive()) delay(backoffDelay)
                     attempts++
                 }
             }
@@ -886,18 +887,24 @@ fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
  */
 fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R): One<R> =
     One.generate { emit ->
-        var valueA: Any = Unset
-        val resultA = a.collect { v -> valueA = v; Signal.Downstream.Cancel }
+        var valueA: Either<Unset, A> = Unset.left()
+        val resultA = a.collect { v -> valueA = v.right(); Signal.Downstream.Cancel }
         if (resultA is Either.Left) { emit(Signal.Upstream.Error(resultA.value)); return@generate }
-        if (valueA === Unset) { emit(Signal.Upstream.Complete); return@generate }
-        var valueB: Any = Unset
-        val resultB = b.collect { v -> valueB = v; Signal.Downstream.Cancel }
+        val finalA = valueA
+        var valueB: Either<Unset, B> = Unset.left()
+        val resultB = b.collect { v -> valueB = v.right(); Signal.Downstream.Cancel }
         if (resultB is Either.Left) { emit(Signal.Upstream.Error(resultB.value)); return@generate }
-        if (valueB === Unset) { emit(Signal.Upstream.Complete); return@generate }
-        @Suppress("UNCHECKED_CAST")
-        val result = transform(valueA as A, valueB as B)
-         if (emit(Signal.Upstream.Next(result)) != Signal.Downstream.Cancel)
-            emit(Signal.Upstream.Complete)
+        val finalB = valueB
+        when (finalA) {
+            is Either.Left  -> emit(Signal.Upstream.Complete)
+            is Either.Right -> when (finalB) {
+                is Either.Left  -> emit(Signal.Upstream.Complete)
+                is Either.Right -> {
+                    if (emit(Signal.Upstream.Next(transform(finalA.value, finalB.value))) != Signal.Downstream.Cancel)
+                        emit(Signal.Upstream.Complete)
+                }
+            }
+        }
     }
 
 fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) -> R): One<R> =
@@ -987,8 +994,8 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
                 attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
                     log.operator.retrying("retry", attempts, result.value)
-                    val d = policy.backoff.delayFor(attempts)
-                    if (d.isPositive()) delay(d)
+                    val backoffDelay = policy.backoff.delayFor(attempts)
+                    if (backoffDelay.isPositive()) delay(backoffDelay)
                     attempts++
                 }
             }
@@ -1058,18 +1065,13 @@ fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
  * [Exception] if the source errored or completed without emitting.
  */
 suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
-    var result: Any = Unset
-    val outcome = collect { value ->
-        result = value
-        Signal.Downstream.Cancel
-    }
+    var result: Either<Unset, T> = Unset.left()
+    val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
+    val final = result
     return when {
-        result !== Unset        -> {
-            @Suppress("UNCHECKED_CAST")
-            (result as T).right()
-        }
+        final  is Either.Right -> final.value.right()
         outcome is Either.Left -> outcome
-        else                    -> NoSuchElementException().left()
+        else                   -> NoSuchElementException().left()
     }
 }
 
@@ -1097,11 +1099,13 @@ suspend fun <T : Any> One<T>.await(timeout: Duration): Either<Exception, T> =
  */
 fun <T : Any> One<T>.cache(): One<T> {
     val mutex  = Mutex()
-    var cached: Any = Unset
+    var cached: Either<Unset, Either<Exception, T>> = Unset.left()
     return One.generate { emit ->
         val result: Either<Exception, T> = mutex.withLock {
-            @Suppress("UNCHECKED_CAST")
-            if (cached === Unset) await().also { cached = it } else cached as Either<Exception, T>
+            when (val cachedResult = cached) {
+                is Either.Left  -> await().also { cached = it.right() }
+                is Either.Right -> cachedResult.value
+            }
         }
         when (result) {
             is Either.Right -> {
