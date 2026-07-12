@@ -31,109 +31,109 @@ class OperatorsTest {
 
         @Test
         fun `map transforms items`() = runTest {
-            val result = Many.of(1, 2, 3).map { it * 2 }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).map { it * 2 }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(2, 4, 6), result.value)
         }
 
         @Test
         fun `map on empty emits nothing`() = runTest {
-            val result = Many.empty<Int>().map { it * 2 }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.empty<Int>().map { it * 2 }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
         @Test
         fun `map propagates error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).map { it * 2 }.toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).map { it * 2 }.toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `filter keeps matching items`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).filter { it % 2 == 0 }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).filter { it % 2 == 0 }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(2, 4), result.value)
         }
 
         @Test
         fun `filter propagates error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).filter { it % 2 == 0 }.toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).filter { it % 2 == 0 }.toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `mapNotNull transforms and drops nulls`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).mapNotNull { if (it % 2 == 0) it * 10 else null }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).mapNotNull { if (it % 2 == 0) it * 10 else null }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(20, 40), result.value)
         }
 
         @Test
         fun `mapNotNull on all-null source emits nothing`() = runTest {
-            val result = Many.of(1, 3, 5).mapNotNull<Int, Int> { null }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 3, 5).mapNotNull<Int, Int> { null }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
         @Test
         fun `mapNotNull propagates error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).mapNotNull { it * 2 }.toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).mapNotNull { it * 2 }.toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `take limits to n items`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).take(3).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).take(3).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `take zero emits nothing`() = runTest {
-            val result = Many.of(1, 2, 3).take(0).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).take(0).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
         @Test
         fun `skip drops first n items`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).skip(2).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).skip(2).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(3, 4, 5), result.value)
         }
 
         @Test
         fun `skipWhile skips until predicate false`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 1).skipWhile { it < 3 }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3, 4, 1).skipWhile { it < 3 }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(3, 4, 1), result.value)
         }
 
         @Test
         fun `takeWhile emits until predicate false`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).takeWhile { it < 4 }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).takeWhile { it < 4 }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `distinct removes duplicates`() = runTest {
-            val result = Many.of(1, 2, 1, 3, 2).distinct().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 1, 3, 2).distinct().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `distinctUntilChanged removes consecutive duplicates only`() = runTest {
-            val result = Many.of(1, 1, 2, 2, 1).distinctUntilChanged().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 1, 2, 2, 1).distinctUntilChanged().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 1), result.value)
         }
     }
@@ -142,22 +142,22 @@ class OperatorsTest {
 
         @Test
         fun `flatMap expands each item`() = runTest {
-            val result = Many.of(1, 2, 3).flatMap { Many.of(it, it * 10) }.toSet().get()
-            assertIs<Either.Left<Set<Int>>>(result)
+            val result = Many.items(1, 2, 3).flatMap { Many.items(it, it * 10) }.toSet().await()
+            assertIs<Either.Right<Set<Int>>>(result)
             assertEquals(setOf(1, 10, 2, 20, 3, 30), result.value)
         }
 
         @Test
         fun `concatMap preserves order`() = runTest {
-            val result = Many.of(1, 2, 3).concatMap { Many.of(it, it * 10) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).concatMap { Many.items(it, it * 10) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 10, 2, 20, 3, 30), result.value)
         }
 
         @Test
         fun `flatMap with concurrency 1 equals concatMap`() = runTest {
-            val flat = Many.of(1, 2, 3).flatMap(concurrency = 1) { Many.of(it, it * 10) }.toList().get()
-            val concat = Many.of(1, 2, 3).concatMap { Many.of(it, it * 10) }.toList().get()
+            val flat = Many.items(1, 2, 3).flatMap(concurrency = 1) { Many.items(it, it * 10) }.toList().await()
+            val concat = Many.items(1, 2, 3).concatMap { Many.items(it, it * 10) }.toList().await()
             assertEquals(flat, concat)
         }
     }
@@ -166,43 +166,43 @@ class OperatorsTest {
 
         @Test
         fun `merge interleaves two streams`() = runTest {
-            val result = merge(Many.of(1, 3), Many.of(2, 4)).toSet().get()
-            assertIs<Either.Left<Set<Int>>>(result)
+            val result = merge(Many.items(1, 3), Many.items(2, 4)).toSet().await()
+            assertIs<Either.Right<Set<Int>>>(result)
             assertEquals(setOf(1, 2, 3, 4), result.value)
         }
 
         @Test
         fun `mergeWith combines two streams`() = runTest {
-            val result = Many.of(1, 2).mergeWith(Many.of(3, 4)).toSet().get()
-            assertIs<Either.Left<Set<Int>>>(result)
+            val result = Many.items(1, 2).mergeWith(Many.items(3, 4)).toSet().await()
+            assertIs<Either.Right<Set<Int>>>(result)
             assertEquals(setOf(1, 2, 3, 4), result.value)
         }
 
         @Test
         fun `concat sequences streams in order`() = runTest {
-            val result = concat(Many.of(1, 2), Many.of(3, 4)).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = concat(Many.items(1, 2), Many.items(3, 4)).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3, 4), result.value)
         }
 
         @Test
         fun `concat with empty streams`() = runTest {
-            val result = concat(Many.empty(), Many.of(1, 2), Many.empty<Int>()).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = concat(Many.empty(), Many.items(1, 2), Many.empty<Int>()).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2), result.value)
         }
 
         @Test
         fun `zip pairs items from two streams`() = runTest {
-            val result = zip(Many.of(1, 2, 3), Many.of("a", "b", "c")) { n, s -> "$n$s" }.toList().get()
-            assertIs<Either.Left<List<String>>>(result)
+            val result = zip(Many.items(1, 2, 3), Many.items("a", "b", "c")) { n, s -> "$n$s" }.toList().await()
+            assertIs<Either.Right<List<String>>>(result)
             assertEquals(listOf("1a", "2b", "3c"), result.value)
         }
 
         @Test
         fun `zip stops at shortest stream`() = runTest {
-            val result = zip(Many.of(1, 2), Many.of("a", "b", "c")) { n, s -> "$n$s" }.toList().get()
-            assertIs<Either.Left<List<String>>>(result)
+            val result = zip(Many.items(1, 2), Many.items("a", "b", "c")) { n, s -> "$n$s" }.toList().await()
+            assertIs<Either.Right<List<String>>>(result)
             assertEquals(listOf("1a", "2b"), result.value)
         }
 
@@ -218,10 +218,10 @@ class OperatorsTest {
                 emit(Signal.Upstream.Next(2))
                 emit(Signal.Upstream.Error(cause))
             }
-            val result = zip(sourceA, Many.of("a")) { n, s -> "$n$s" }.toList().get()
+            val result = zip(sourceA, Many.items("a")) { n, s -> "$n$s" }.toList().await()
             // Either completes with ["1a"] or surfaces the error from A — either is acceptable.
             // What must NOT happen is a hang.
-            assertTrue(result is Either.Left || result is Either.Right)
+            assertTrue(result is Either.Right || result is Either.Left)
         }
     }
 
@@ -229,15 +229,15 @@ class OperatorsTest {
 
         @Test
         fun `buffer collects items into fixed size lists`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).buffer(2).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).buffer(2).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertEquals(listOf(listOf(1, 2), listOf(3, 4), listOf(5)), result.value)
         }
 
         @Test
         fun `buffer emits partial bucket on completion`() = runTest {
-            val result = Many.of(1, 2, 3).buffer(2).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3).buffer(2).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertEquals(listOf(listOf(1, 2), listOf(3)), result.value)
         }
     }
@@ -247,16 +247,16 @@ class OperatorsTest {
         @Test
         fun `recover replaces error with fallback stream`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).recover { Many.of(99) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.error<Int>(cause).recover { Many.items(99) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(99), result.value)
         }
 
         @Test
         fun `recoverWith replaces error with fallback value`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).recoverWith { 99 }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.error<Int>(cause).recoverWith { 99 }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(99), result.value)
         }
 
@@ -268,8 +268,8 @@ class OperatorsTest {
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
                 emit(Signal.Upstream.Complete)
-            }.retry(times = 3).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            }.retry(times = 3).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(42), result.value)
             assertEquals(3, attempts)
         }
@@ -277,8 +277,8 @@ class OperatorsTest {
         @Test
         fun `retry exhausts and propagates error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).retry(times = 2).toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).retry(times = 2).toList().await()
+            assertIs<Either.Left<AelvException>>(result)
         }
 
         @Test
@@ -289,8 +289,8 @@ class OperatorsTest {
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
                 emit(Signal.Upstream.Complete)
-            }.retry(Policy.retry().maxAttempts(3)).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            }.retry(Policy.retry().maxAttempts(3)).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(42), result.value)
             assertEquals(3, attempts)
         }
@@ -298,8 +298,8 @@ class OperatorsTest {
         @Test
         fun `retry with Retry max exhausts and propagates`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).retry(Policy.retry().maxAttempts(2)).toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).retry(Policy.retry().maxAttempts(2)).toList().await()
+            assertIs<Either.Left<AelvException>>(result)
         }
 
         @Test
@@ -310,8 +310,8 @@ class OperatorsTest {
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
                 emit(Signal.Upstream.Complete)
-            }.retry(Policy.retry().withBackoff(10.milliseconds).maxAttempts(3)).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            }.retry(Policy.retry().withBackoff(10.milliseconds).maxAttempts(3)).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(3, attempts)
         }
 
@@ -323,8 +323,8 @@ class OperatorsTest {
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
                 emit(Signal.Upstream.Complete)
-            }.retry(Policy.retry().withBackoff(10.milliseconds, 100.milliseconds).maxAttempts(3)).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            }.retry(Policy.retry().withBackoff(10.milliseconds, 100.milliseconds).maxAttempts(3)).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(3, attempts)
         }
 
@@ -333,8 +333,8 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             val result = Many.error<Int>(cause)
                 .retry(Policy.retry().on(NoSuchElementException::class).maxAttempts(5))
-                .toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+                .toList().await()
+            assertIs<Either.Left<AelvException>>(result)
         }
 
         @Test
@@ -343,8 +343,8 @@ class OperatorsTest {
             val result = Many.generate<Int> { emit ->
                 attempts++
                 throw InvalidDemandException(-1)
-            }.retry(Policy.retry().maxAttempts(0)).toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            }.retry(Policy.retry().maxAttempts(0)).toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(1, attempts)
         }
     }
@@ -353,51 +353,51 @@ class OperatorsTest {
 
         @Test
         fun `fold accumulates all items`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).fold(0) { acc, item -> acc + item }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).fold(0) { acc, item -> acc + item }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(15, result.value)
         }
 
         @Test
         fun `fold propagates error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).fold(0) { acc, item -> acc + item }.get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).fold(0) { acc, item -> acc + item }.await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `first returns first item`() = runTest {
-            val result = Many.of(1, 2, 3).first()
-            assertIs<Either.Left<Int>>(result)
+            val result = Many.items(1, 2, 3).first()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(1, result.value)
         }
 
         @Test
         fun `first on empty returns NoSuchElementException`() = runTest {
             val result = Many.empty<Int>().first()
-            assertIs<Either.Right<AelvException>>(result)
+            assertIs<Either.Left<AelvException>>(result)
             assertIs<NoSuchElementException>(result.value)
         }
 
         @Test
         fun `last returns last item`() = runTest {
-            val result = Many.of(1, 2, 3).last()
-            assertIs<Either.Left<Int>>(result)
+            val result = Many.items(1, 2, 3).last()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(3, result.value)
         }
 
         @Test
         fun `toList returns immutable list`() = runTest {
-            val result = Many.of(1, 2, 3).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `toSet returns immutable set`() = runTest {
-            val result = Many.of(1, 2, 1, 3).toSet().get()
-            assertIs<Either.Left<Set<Int>>>(result)
+            val result = Many.items(1, 2, 1, 3).toSet().await()
+            assertIs<Either.Right<Set<Int>>>(result)
             assertEquals(setOf(1, 2, 3), result.value)
         }
     }
@@ -406,29 +406,29 @@ class OperatorsTest {
 
         @Test
         fun `map transforms value`() = runTest {
-            val result = One.of(5).map { it * 3 }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.single(5).map { it * 3 }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(15, result.value)
         }
 
         @Test
         fun `flatMap chains to another One`() = runTest {
-            val result = One.of(5).flatMap { One.of(it * 2) }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.single(5).flatMap { One.single(it * 2) }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(10, result.value)
         }
 
         @Test
         fun `flatMapMany expands to Many`() = runTest {
-            val result = One.of(3).flatMapMany { Many.of(it, it + 1, it + 2) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = One.single(3).flatMapMany { Many.items(it, it + 1, it + 2) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(3, 4, 5), result.value)
         }
 
         @Test
         fun `recover replaces error with fallback value`() = runTest {
-            val result = One.error<Int>(InvalidDemandException(-1)).recover { 99 }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.error<Int>(InvalidDemandException(-1)).recover { 99 }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(99, result.value)
         }
 
@@ -439,8 +439,8 @@ class OperatorsTest {
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
                 42
-            }.retry(Policy.retry().maxAttempts(3)).get()
-            assertIs<Either.Left<Int>>(result)
+            }.retry(Policy.retry().maxAttempts(3)).await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(42, result.value)
             assertEquals(3, attempts)
         }
@@ -450,11 +450,11 @@ class OperatorsTest {
 
         @Test
         fun `groups items by key`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5, 6)
+            val result = Many.items(1, 2, 3, 4, 5, 6)
                 .groupBy({ it % 2 }) { key, group -> group.map { key to it } }
                 .toList()
-                .get()
-            assertIs<Either.Left<List<Pair<Int, Int>>>>(result)
+                .await()
+            assertIs<Either.Right<List<Pair<Int, Int>>>>(result)
             val byKey = result.value.groupBy({ it.first }, { it.second })
             assertEquals(listOf(2, 4, 6), byKey[0]?.sorted())
             assertEquals(listOf(1, 3, 5), byKey[1]?.sorted())
@@ -463,19 +463,19 @@ class OperatorsTest {
         @Test
         fun `each group receives a terminal Complete`() = runTest {
             val completed = mutableSetOf<String>()
-            Many.of("a", "b", "a", "c")
+            Many.items("a", "b", "a", "c")
                 .groupBy({ it }) { key, group ->
                     group.doOnComplete { completed.add(key) }.map { key to it }
                 }
                 .toList()
-                .get()
+                .await()
             assertEquals(setOf("a", "b", "c"), completed)
         }
 
         @Test
         fun `each group receives an Error terminal when source errors`() = runTest {
             val cause = InvalidDemandException(-1)
-            val errors = mutableMapOf<String, AelvException>()
+            val errors = mutableMapOf<String, Exception>()
             val result = Many.generate<String> { emit ->
                 emit(Signal.Upstream.Next("x"))
                 emit(Signal.Upstream.Next("y"))
@@ -486,19 +486,19 @@ class OperatorsTest {
                 }
                 .recover { Many.empty() }
                 .toList()
-                .get()
-            assertIs<Either.Left<*>>(result)
+                .await()
+            assertIs<Either.Right<*>>(result)
             assertEquals(setOf("x", "y"), errors.keys)
             assertTrue(errors.values.all { it === cause })
         }
 
         @Test
         fun `single-key source produces one group with all items`() = runTest {
-            val result = Many.of(10, 20, 30)
+            val result = Many.items(10, 20, 30)
                 .groupBy({ "only" }) { _, group -> group }
                 .toList()
-                .get()
-            assertIs<Either.Left<List<Int>>>(result)
+                .await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(10, 20, 30), result.value)
         }
 
@@ -507,19 +507,19 @@ class OperatorsTest {
             val result = Many.empty<Int>()
                 .groupBy({ it }) { _, group -> group }
                 .toList()
-                .get()
-            assertIs<Either.Left<List<Int>>>(result)
+                .await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
         @Test
         fun `Cancel on outer stream cancels all group pipelines`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5, 6)
+            val result = Many.items(1, 2, 3, 4, 5, 6)
                 .groupBy({ it % 2 }) { _, group -> group }
                 .take(1)
                 .toList()
-                .get()
-            assertIs<Either.Left<List<Int>>>(result)
+                .await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(1, result.value.size)
         }
 
@@ -527,12 +527,12 @@ class OperatorsTest {
         fun `group Complete is delivered before outer stream Complete`() = runTest {
             // Regression for Bug G1/G3: operator owns subscriptions so this is now structural.
             val completedGroups = mutableSetOf<Int>()
-            Many.of(1, 2, 3, 4, 5, 6)
+            Many.items(1, 2, 3, 4, 5, 6)
                 .groupBy({ it % 3 }) { key, group ->
                     group.doOnComplete { completedGroups.add(key) }.map { key }
                 }
                 .toList()
-                .get()
+                .await()
             assertEquals(setOf(0, 1, 2), completedGroups)
         }
 
@@ -552,19 +552,19 @@ class OperatorsTest {
                 }
                 .recover { Many.empty() }
                 .toList()
-                .get()
+                .await()
             assertEquals(setOf(0, 1), erroredGroups)
         }
 
         @Test
         fun `groupHandler can apply different transforms per key`() = runTest {
-            val result = Many.of(1, 2, 3, 4)
+            val result = Many.items(1, 2, 3, 4)
                 .groupBy({ it % 2 }) { key, group ->
                     if (key == 0) group.map { it * 10 } else group.map { it * 100 }
                 }
                 .toList()
-                .get()
-            assertIs<Either.Left<List<Int>>>(result)
+                .await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(setOf(20, 40, 100, 300), result.value.toSet())
         }
     }
@@ -575,8 +575,8 @@ class OperatorsTest {
         fun `switchMap emits from latest inner stream only`() = runTest {
             // switchMap cancels previous inner on each new outer item.
             // With a synchronous source, all but the last inner get cancelled before emitting.
-            val result = Many.of(1, 2, 3).switchMap { Many.of(it * 10) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).switchMap { Many.items(it * 10) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isNotEmpty())
             assertTrue(result.value.last() == 30)
         }
@@ -584,15 +584,15 @@ class OperatorsTest {
         @Test
         fun `switchMap propagates source error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).switchMap { Many.of(it) }.toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).switchMap { Many.items(it) }.toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `switchMap completes on empty source`() = runTest {
-            val result = Many.empty<Int>().switchMap { Many.of(it) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.empty<Int>().switchMap { Many.items(it) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
     }
@@ -601,22 +601,22 @@ class OperatorsTest {
 
         @Test
         fun `flatMapSequential preserves order`() = runTest {
-            val result = Many.of(1, 2, 3).flatMapSequential { Many.of(it, it * 10) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).flatMapSequential { Many.items(it, it * 10) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 10, 2, 20, 3, 30), result.value)
         }
 
         @Test
         fun `flatMapSequential with maxConcurrency 1 equals concatMap`() = runTest {
-            val sequential = Many.of(1, 2, 3).flatMapSequential(maxConcurrency = 1) { Many.of(it, it * 10) }.toList().get()
-            val concat = Many.of(1, 2, 3).concatMap { Many.of(it, it * 10) }.toList().get()
+            val sequential = Many.items(1, 2, 3).flatMapSequential(maxConcurrency = 1) { Many.items(it, it * 10) }.toList().await()
+            val concat = Many.items(1, 2, 3).concatMap { Many.items(it, it * 10) }.toList().await()
             assertEquals(sequential, concat)
         }
 
         @Test
         fun `flatMapSequential on empty source completes`() = runTest {
-            val result = Many.empty<Int>().flatMapSequential { Many.of(it) }.toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.empty<Int>().flatMapSequential { Many.items(it) }.toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
     }
@@ -634,8 +634,8 @@ class OperatorsTest {
 
         @Test
         fun `takeUntilOther completes normally when source completes first`() = runTest {
-            val result = Many.of(1, 2, 3).takeUntilOther(Many.never<Unit>()).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).takeUntilOther(Many.never<Unit>()).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
     }
@@ -644,16 +644,16 @@ class OperatorsTest {
 
         @Test
         fun `delaySubscription waits for trigger then emits source`() = runTest {
-            val result = Many.of(1, 2, 3).delaySubscription(Many.of(Unit)).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).delaySubscription(Many.items(Unit)).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `delaySubscription propagates trigger error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.of(1, 2).delaySubscription(Many.error<Unit>(cause)).toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.items(1, 2).delaySubscription(Many.error<Unit>(cause)).toList().await()
+            assertIs<Either.Left<AelvException>>(result)
         }
     }
 
@@ -661,16 +661,16 @@ class OperatorsTest {
 
         @Test
         fun `onBackpressureDrop completes normally on small source`() = runTest {
-            val result = Many.of(1, 2, 3).onBackpressureDrop().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).onBackpressureDrop().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isNotEmpty())
         }
 
         @Test
         fun `onBackpressureDrop propagates error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).onBackpressureDrop().toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).onBackpressureDrop().toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
     }
@@ -681,8 +681,8 @@ class OperatorsTest {
         fun `distinctUntilChangedBy uses key for comparison`() = runTest {
             data class Item(val key: Int, val value: String)
             val items = listOf(Item(1, "a"), Item(1, "b"), Item(2, "c"), Item(2, "d"), Item(1, "e"))
-            val result = Many.of(items).distinctUntilChangedBy { it.key }.toList().get()
-            assertIs<Either.Left<List<Item>>>(result)
+            val result = Many.from(items).distinctUntilChangedBy { it.key }.toList().await()
+            assertIs<Either.Right<List<Item>>>(result)
             assertEquals(listOf(Item(1, "a"), Item(2, "c"), Item(1, "e")), result.value)
         }
     }
@@ -692,10 +692,10 @@ class OperatorsTest {
         @Test
         fun `doOnSubscribe fires before any items`() = runTest {
             val fired = mutableListOf<String>()
-            Many.of(1, 2, 3)
+            Many.items(1, 2, 3)
                 .doOnSubscribe { fired.add("subscribed") }
                 .doOnNext { fired.add("item") }
-                .toList().get()
+                .toList().await()
             assertEquals("subscribed", fired.first())
         }
     }
@@ -705,7 +705,7 @@ class OperatorsTest {
         @Test
         fun `doFinally fires on normal completion`() = runTest {
             var terminal: Signal.Terminal? = null
-            Many.of(1, 2).doFinally { terminal = it }.toList().get()
+            Many.items(1, 2).doFinally { terminal = it }.toList().await()
             assertIs<Signal.Upstream.Complete>(terminal)
         }
 
@@ -713,14 +713,14 @@ class OperatorsTest {
         fun `doFinally fires on error`() = runTest {
             val cause = InvalidDemandException(-1)
             var terminal: Signal.Terminal? = null
-            Many.error<Int>(cause).doFinally { terminal = it }.toList().get()
+            Many.error<Int>(cause).doFinally { terminal = it }.toList().await()
             assertIs<Signal.Upstream.Error>(terminal)
         }
 
         @Test
         fun `doFinally fires on cancel`() = runTest {
             var terminal: Signal.Terminal? = null
-            Many.of(1, 2, 3).doFinally { terminal = it }.take(1).toList().get()
+            Many.items(1, 2, 3).doFinally { terminal = it }.take(1).toList().await()
             assertIs<Signal.Downstream.Cancel>(terminal)
         }
     }
@@ -729,23 +729,23 @@ class OperatorsTest {
 
         @Test
         fun `bufferTimeout emits bucket when size reached`() = runTest {
-            val result = Many.of(1, 2, 3, 4).bufferTimeout(2, 5.seconds).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3, 4).bufferTimeout(2, 5.seconds).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertTrue(result.value.isNotEmpty())
             assertTrue(result.value.all { it.size <= 2 })
         }
 
         @Test
         fun `bufferTimeout flushes partial bucket on source complete`() = runTest {
-            val result = Many.of(1, 2, 3).bufferTimeout(10, 5.seconds).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3).bufferTimeout(10, 5.seconds).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertEquals(listOf(listOf(1, 2, 3)), result.value)
         }
 
         @Test
         fun `bufferTimeout flushes on timeout`() = runTest {
-            val result = Many.of(1).bufferTimeout(100, 50.milliseconds).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1).bufferTimeout(100, 50.milliseconds).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertEquals(listOf(listOf(1)), result.value)
         }
     }
@@ -754,15 +754,15 @@ class OperatorsTest {
 
         @Test
         fun `combineLatest pairs latest values`() = runTest {
-            val result = combineLatest(Many.of(1, 2), Many.of("a", "b")) { n, s -> "$n$s" }.toList().get()
-            assertIs<Either.Left<List<String>>>(result)
+            val result = combineLatest(Many.items(1, 2), Many.items("a", "b")) { n, s -> "$n$s" }.toList().await()
+            assertIs<Either.Right<List<String>>>(result)
             assertTrue(result.value.isNotEmpty())
         }
 
         @Test
         fun `combineLatest on empty source completes without items`() = runTest {
-            val result = combineLatest(Many.empty<Int>(), Many.of("a")) { n, s -> "$n$s" }.toList().get()
-            assertIs<Either.Left<List<String>>>(result)
+            val result = combineLatest(Many.empty<Int>(), Many.items("a")) { n, s -> "$n$s" }.toList().await()
+            assertIs<Either.Right<List<String>>>(result)
             assertTrue(result.value.isEmpty())
         }
     }
@@ -771,37 +771,37 @@ class OperatorsTest {
 
         @Test
         fun `zip pairs two One values`() = runTest {
-            val result = zip(One.of(1), One.of("a")) { n, s -> "$n$s" }.get()
-            assertIs<Either.Left<String>>(result)
+            val result = zip(One.single(1), One.single("a")) { n, s -> "$n$s" }.await()
+            assertIs<Either.Right<String>>(result)
             assertEquals("1a", result.value)
         }
 
         @Test
         fun `zip completes empty when first source is empty`() = runTest {
-            val result = zip(One.defer<Int> { throw NoSuchElementException() }.recover { 0 }.flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } }, One.of("a")) { n, s -> "$n$s" }.get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = zip(One.defer<Int> { throw NoSuchElementException() }.recover { 0 }.flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } }, One.single("a")) { n, s -> "$n$s" }.await()
+            assertIs<Either.Left<AelvException>>(result)
         }
 
         @Test
         fun `zip propagates error from first source`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = zip(One.error<Int>(cause), One.of("a")) { n, s -> "$n$s" }.get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = zip(One.error<Int>(cause), One.single("a")) { n, s -> "$n$s" }.await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `zip propagates error from second source`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = zip(One.of(1), One.error<String>(cause)) { n, s -> "$n$s" }.get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = zip(One.single(1), One.error<String>(cause)) { n, s -> "$n$s" }.await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `zipWith is alias for zip`() = runTest {
-            val result = One.of(2).zipWith(One.of(3)) { a, b -> a + b }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.single(2).zipWith(One.single(3)) { a, b -> a + b }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(5, result.value)
         }
     }
@@ -811,7 +811,7 @@ class OperatorsTest {
         @Test
         fun `flatMapNone chains to None`() = runTest {
             var ran = false
-            One.of(42).flatMapNone { None.defer { ran = true } }.await()
+            One.single(42).flatMapNone { None.defer { ran = true } }.await()
             assertTrue(ran)
         }
 
@@ -819,7 +819,7 @@ class OperatorsTest {
         fun `flatMapNone propagates error from One`() = runTest {
             val cause = InvalidDemandException(-1)
             val result = One.error<Int>(cause).flatMapNone { None.complete() }.await()
-            assertIs<Either.Right<AelvException>>(result)
+            assertIs<Either.Left<AelvException>>(result)
         }
     }
 
@@ -829,19 +829,19 @@ class OperatorsTest {
         fun `cache executes source once for multiple subscribers`() = runTest {
             var count = 0
             val cached = One.defer { ++count; 42 }.cache()
-            cached.get()
-            cached.get()
-            cached.get()
+            cached.await()
+            cached.await()
+            cached.await()
             assertEquals(1, count)
         }
 
         @Test
         fun `cache replays same value`() = runTest {
-            val cached = One.of(99).cache()
-            val r1 = cached.get()
-            val r2 = cached.get()
+            val cached = One.single(99).cache()
+            val r1 = cached.await()
+            val r2 = cached.await()
             assertEquals(r1, r2)
-            assertEquals(99, (r1 as Either.Left).value)
+            assertEquals(99, (r1 as Either.Right).value)
         }
     }
 
@@ -849,15 +849,15 @@ class OperatorsTest {
 
         @Test
         fun `publishOn does not lose items`() = runTest {
-            val result = Many.of(1, 2, 3).publishOn(Dispatchers.Default).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).publishOn(Dispatchers.Default).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `subscribeOn does not lose items`() = runTest {
-            val result = Many.of(1, 2, 3).subscribeOn(Dispatchers.Default).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).subscribeOn(Dispatchers.Default).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
     }
@@ -866,24 +866,24 @@ class OperatorsTest {
 
         @Test
         fun `reduce accumulates all items`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).reduce { a, b -> a + b }.get()
-            assertIs<Either.Left<Either.Left<Int>>>(result)
-            assertEquals(15, (result.value as Either.Left).value)
+            val result = Many.items(1, 2, 3, 4, 5).reduce { a, b -> a + b }.await()
+            assertIs<Either.Right<Int>>(result)
+            assertEquals(15, result.value)
         }
 
         @Test
         fun `reduce on empty returns NoSuchElementException`() = runTest {
-            val result = Many.empty<Int>().reduce { a, b -> a + b }.get()
-            assertIs<Either.Left<Either.Right<AelvException>>>(result)
-            assertIs<NoSuchElementException>((result.value as Either.Right).value)
+            val result = Many.empty<Int>().reduce { a, b -> a + b }.await()
+            assertIs<Either.Left<AelvException>>(result)
+            assertIs<NoSuchElementException>(result.value)
         }
 
         @Test
         fun `reduce propagates source error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).reduce { a, b -> a + b }.get()
-            assertIs<Either.Left<Either.Right<AelvException>>>(result)
-            assertEquals(cause, (result.value as Either.Right).value)
+            val result = Many.error<Int>(cause).reduce { a, b -> a + b }.await()
+            assertIs<Either.Left<AelvException>>(result)
+            assertEquals(cause, result.value)
         }
     }
 
@@ -891,8 +891,8 @@ class OperatorsTest {
 
         @Test
         fun `interval emits incrementing longs starting at zero`() = runTest {
-            val result = Many.interval(10.milliseconds).take(3).toList().get()
-            assertIs<Either.Left<List<Long>>>(result)
+            val result = Many.interval(10.milliseconds).take(3).toList().await()
+            assertIs<Either.Right<List<Long>>>(result)
             assertEquals(listOf(0L, 1L, 2L), result.value)
         }
     }
@@ -901,22 +901,22 @@ class OperatorsTest {
 
         @Test
         fun `buffer with skip equal to size is same as buffer by size`() = runTest {
-            val result = Many.of(1, 2, 3, 4).buffer(2, 2).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3, 4).buffer(2, 2).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertEquals(listOf(listOf(1, 2), listOf(3, 4)), result.value)
         }
 
         @Test
         fun `buffer with skip greater than size creates gaps`() = runTest {
-            val result = Many.of(1, 2, 3, 4, 5).buffer(2, 3).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3, 4, 5).buffer(2, 3).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             assertEquals(listOf(listOf(1, 2), listOf(4, 5)), result.value)
         }
 
         @Test
         fun `buffer with skip less than size creates overlapping windows`() = runTest {
-            val result = Many.of(1, 2, 3, 4).buffer(3, 1).toList().get()
-            assertIs<Either.Left<List<List<Int>>>>(result)
+            val result = Many.items(1, 2, 3, 4).buffer(3, 1).toList().await()
+            assertIs<Either.Right<List<List<Int>>>>(result)
             // Full windows: [1,2,3], [2,3,4]. Partial trailing: [3,4], [4].
             assertTrue(result.value.contains(listOf(1, 2, 3)))
             assertTrue(result.value.contains(listOf(2, 3, 4)))
@@ -931,8 +931,8 @@ class OperatorsTest {
             sink.emit(1)
             sink.emit(2)
             sink.complete()
-            val result = sink.asMany().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = sink.asMany().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2), result.value)
         }
 
@@ -944,8 +944,8 @@ class OperatorsTest {
             sink.emit(3)
             sink.complete()
             // broadcast has no history — late subscriber gets only the terminal
-            val result = sink.asMany().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = sink.asMany().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
@@ -955,8 +955,8 @@ class OperatorsTest {
             sink.emit(1)
             sink.emit(2)
             sink.complete()
-            val result = sink.asMany().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = sink.asMany().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2), result.value)
         }
 
@@ -967,8 +967,8 @@ class OperatorsTest {
             sink.emit(2)
             sink.emit(3)
             sink.complete()
-            val result = sink.asMany().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = sink.asMany().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(2, 3), result.value)
         }
 
@@ -976,8 +976,8 @@ class OperatorsTest {
         fun `sink complete is delivered to subscriber`() = runTest {
             val sink = Sinks.broadcast<Int>()
             sink.complete()
-            val result = sink.asMany().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = sink.asMany().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
@@ -986,8 +986,8 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             val sink = Sinks.broadcast<Int>()
             sink.error(cause)
-            val result = sink.asMany().toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = sink.asMany().toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
@@ -997,10 +997,10 @@ class OperatorsTest {
             sink.emit(1)
             sink.emit(2)
             sink.complete()
-            val r1 = sink.asMany().toList().get()
-            val r2 = sink.asMany().toList().get()
-            assertIs<Either.Left<List<Int>>>(r1)
-            assertIs<Either.Left<List<Int>>>(r2)
+            val r1 = sink.asMany().toList().await()
+            val r2 = sink.asMany().toList().await()
+            assertIs<Either.Right<List<Int>>>(r1)
+            assertIs<Either.Right<List<Int>>>(r2)
             assertEquals(listOf(1, 2), r1.value)
             assertEquals(listOf(1, 2), r2.value)
         }

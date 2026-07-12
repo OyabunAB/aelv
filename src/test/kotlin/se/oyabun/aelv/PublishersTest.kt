@@ -28,30 +28,30 @@ class PublishersTest {
 
         @Test
         fun `of vararg emits all items in order`() = runTest {
-            val result = Many.of(1, 2, 3).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.items(1, 2, 3).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(1, 2, 3), result.value)
         }
 
         @Test
         fun `of iterable emits all items in order`() = runTest {
-            val result = Many.of(listOf("a", "b", "c")).toList().get()
-            assertIs<Either.Left<List<String>>>(result)
+            val result = Many.from(listOf("a", "b", "c")).toList().await()
+            assertIs<Either.Right<List<String>>>(result)
             assertEquals(listOf("a", "b", "c"), result.value)
         }
 
         @Test
         fun `empty completes with no items`() = runTest {
-            val result = Many.empty<Int>().toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.empty<Int>().toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
 
         @Test
         fun `error signals error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = Many.error<Int>(cause).toList().get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = Many.error<Int>(cause).toList().await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
@@ -62,18 +62,18 @@ class PublishersTest {
                 emit(Signal.Upstream.Next(++count))
                 emit(Signal.Upstream.Complete)
             }
-            val r1 = many.toList().get()
-            val r2 = many.toList().get()
-            assertIs<Either.Left<List<Int>>>(r1)
-            assertIs<Either.Left<List<Int>>>(r2)
+            val r1 = many.toList().await()
+            val r2 = many.toList().await()
+            assertIs<Either.Right<List<Int>>>(r1)
+            assertIs<Either.Right<List<Int>>>(r2)
             assertEquals(listOf(1), r1.value)
             assertEquals(listOf(2), r2.value)
         }
 
         @Test
         fun `from flow bridges all items`() = runTest {
-            val result = Many.from(kotlinx.coroutines.flow.flowOf(10, 20, 30)).toList().get()
-            assertIs<Either.Left<List<Int>>>(result)
+            val result = Many.from(kotlinx.coroutines.flow.flowOf(10, 20, 30)).toList().await()
+            assertIs<Either.Right<List<Int>>>(result)
             assertEquals(listOf(10, 20, 30), result.value)
         }
 
@@ -96,16 +96,16 @@ class PublishersTest {
 
         @Test
         fun `of emits value then completes`() = runTest {
-            val result = One.of(42).get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.single(42).await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(42, result.value)
         }
 
         @Test
         fun `defer executes block on subscribe`() = runTest {
             var executed = false
-            val result = One.defer { executed = true; 99 }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.defer { executed = true; 99 }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(99, result.value)
             assertTrue(executed)
         }
@@ -114,46 +114,45 @@ class PublishersTest {
         fun `cold - executes independently per subscriber`() = runTest {
             var count = 0
             val one = One.defer { ++count }
-            one.get()
-            one.get()
+            one.await()
+            one.await()
             assertEquals(2, count)
         }
 
         @Test
         fun `error signals error`() = runTest {
             val cause = InvalidDemandException(-1)
-            val result = One.error<Int>(cause).get()
-            assertIs<Either.Right<AelvException>>(result)
+            val result = One.error<Int>(cause).await()
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `asMany emits single item then completes`() = runTest {
-            val result = One.of("hello").asMany().toList().get()
-            assertIs<Either.Left<List<String>>>(result)
+            val result = One.single("hello").asMany().toList().await()
+            assertIs<Either.Right<List<String>>>(result)
             assertEquals(listOf("hello"), result.value)
         }
 
         @Test
         fun `create emits value from success callback`() = runTest {
-            val result = One.create<Int> { success, _ -> success(42) }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.create<Int> { success, _ -> success(42) }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(42, result.value)
         }
 
         @Test
         fun `create signals error from failure callback`() = runTest {
             val cause = RuntimeException("boom")
-            val result = One.create<Int> { _, failure -> failure(cause) }.get()
-            assertIs<Either.Right<AelvException>>(result)
-            assertIs<UpstreamErrorException>(result.value)
-            assertEquals(cause, result.value.cause)
+            val result = One.create<Int> { _, failure -> failure(cause) }.await()
+            assertIs<Either.Left<Exception>>(result)
+            assertEquals(cause, result.value)
         }
 
         @Test
         fun `create only uses first callback invocation`() = runTest {
-            val result = One.create<Int> { success, _ -> success(1) }.get()
-            assertIs<Either.Left<Int>>(result)
+            val result = One.create<Int> { success, _ -> success(1) }.await()
+            assertIs<Either.Right<Int>>(result)
             assertEquals(1, result.value)
         }
     }
@@ -162,13 +161,13 @@ class PublishersTest {
 
         @Test
         fun `complete signals completion`() = runTest {
-            assertIs<Either.Left<Unit>>(None.complete<Unit>().await())
+            assertIs<Either.Right<Unit>>(None.complete<Unit>().await())
         }
 
         @Test
         fun `defer executes block on subscribe`() = runTest {
             var executed = false
-            assertIs<Either.Left<Unit>>(None.defer<Unit> { executed = true }.await())
+            assertIs<Either.Right<Unit>>(None.defer<Unit> { executed = true }.await())
             assertTrue(executed)
         }
 
@@ -176,13 +175,13 @@ class PublishersTest {
         fun `error signals error`() = runTest {
             val cause = InvalidDemandException(-1)
             val result = None.error<Unit>(cause).await()
-            assertIs<Either.Right<AelvException>>(result)
+            assertIs<Either.Left<AelvException>>(result)
             assertEquals(cause, result.value)
         }
 
         @Test
         fun `from publisher drains and completes`() = runTest {
-            assertIs<Either.Left<Unit>>(None.from(Many.of(1, 2, 3)).await())
+            assertIs<Either.Right<Unit>>(None.from(Many.items(1, 2, 3)).await())
         }
     }
 }

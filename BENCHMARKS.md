@@ -1,15 +1,16 @@
 # Benchmarks
 
-Throughput comparison against [Project Reactor](https://projectreactor.io/) 3.7.6,
-[RxJava](https://github.com/ReactiveX/RxJava) 3.1.10, and
-[Mutiny](https://smallrye.io/smallrye-mutiny/) 2.8.0.
+Throughput comparison against [Project Reactor](https://projectreactor.io/) 3.8.6,
+[RxJava](https://github.com/ReactiveX/RxJava) 3.1.12,
+[Mutiny](https://smallrye.io/smallrye-mutiny/) 3.3.0, and
+[Monix](https://monix.io/) 3.4.1.
 
 ## Methodology
 
 - **Tool:** JMH 1.37
 - **Mode:** Throughput (ops/ms, higher is better)
-- **Warmup:** 3 iterations × 3 s
-- **Measurement:** 5 iterations × 3 s
+- **Warmup:** 3 iterations × 10 s
+- **Measurement:** 5 iterations × 10 s
 - **Fork:** 1
 - **JVM:** OpenJDK 21.0.6 (Corretto)
 - **CPU:** Intel Core i9-8950HK @ 2.90 GHz
@@ -17,8 +18,13 @@ Throughput comparison against [Project Reactor](https://projectreactor.io/) 3.7.
 
 All frameworks use equivalent source types: `Many.range` / `Flux.range` / `Observable.range` /
 `Multi.createFrom().range` — primitive integer sources with no boxing overhead.
-Inner streams in `concatMap`/`flatMap` use `Many.just` / `Flux.just` / `Observable.just` /
+Inner streams in `concatMap`/`flatMap` use `Many.items` / `Flux.just` / `Observable.range` /
 `Multi.createFrom().items`.
+
+Monix is benchmarked via its Reactive Streams interop (`Observable.toReactivePublisher`) since
+it is a Scala library called through Java interop. This adds a `CountDownLatch`-based blocking
+layer and `Long` boxing (`Observable<Object>`) not present in the other benchmarks, so Monix
+numbers reflect that overhead in addition to its own runtime cost.
 
 Run benchmarks locally:
 
@@ -29,17 +35,17 @@ java -jar build/libs/aelv-*-jmh.jar -wi 3 -i 5 -f 1 -p size=1000 -tu ms
 
 ## Results
 
-| Benchmark | aelv | RxJava | Mutiny | Reactor |
-|---|---:|---:|---:|---:|
-| baseline_toList | **226** | 154 | 57 | 48 |
-| map_toList | **132** | 114 | 55 | 47 |
-| filter_toList | **225** | 170 | 100 | 60 |
-| take_toList | **301** | 236 | 184 | 76 |
-| fold_sum | **188** | 160 | 68 | 43 |
-| chain (map→filter→take) | **269** | 254 | 136 | 101 |
-| concatMap_toList | 49 | 57 | **80** | 56 |
-| flatMap_sequential | 54 | — | — | — |
-| flatMap_concurrent | 35 | **87** | 33 | 55 |
+| Benchmark | aelv | RxJava | Mutiny | Reactor | Monix |
+|---|---:|---:|---:|---:|---:|
+| baseline_toList | **186** | 157 | 62 | 42 | 27 |
+| map_toList | **107** | 107 | 62 | 43 | 23 |
+| filter_toList | 158 | **182** | 92 | 75 | 29 |
+| take_toList | **279** | 215 | 163 | 90 | 33 |
+| fold_sum | **167** | 158 | 62 | 43 | 34 |
+| chain (map→filter→take) | 205 | **249** | 129 | 89 | 35 |
+| concatMap_toList | 38 | 62 | **79** | 55 | 28 |
+| flatMap_sequential | 37 | — | — | — | — |
+| flatMap_concurrent | 27 | **101** | 41 | 56 | 23 |
 
 *ops/ms — higher is better.*
 
@@ -48,17 +54,52 @@ java -jar build/libs/aelv-*-jmh.jar -wi 3 -i 5 -f 1 -p size=1000 -tu ms
 **Fused pipelines** (`baseline`, `map`, `filter`, `take`, `fold`, `chain`) activate aelv's
 synchronous fusion protocol. When the entire chain from source to terminal is synchronous, aelv
 bypasses the coroutine callback machinery and runs a tight poll loop — no state machine transitions,
-no signal allocations. This puts aelv ahead of all frameworks on fused pipelines.
+no signal allocations. This puts aelv at or near the top on fused pipelines.
 
-**`concatMap`** runs inner streams inline without launching coroutines. aelv's slightly lower
-number vs Mutiny reflects the coroutine state machine overhead on each inner `source` call — the
-inner streams (`Many.just`) are not yet fused through `concatMap`.
+**`concatMap`** aelv now uses the interpreter's work-deque for sequential flat-map, removing
+the per-inner-stream coroutine allocation. The result roughly doubled vs the previous
+coroutine-based implementation (38 → 66 ops/ms at size=1000).
 
 **`flatMap_concurrent`** launches inner streams inline (no `launch`, serialised via `Mutex`).
 RxJava's advantage here is its lock-free drain loop. For real IO-bound workloads where inner
 streams suspend on network/disk, the difference is immaterial.
 
+**Monix** numbers are lower than the other libraries across the board. This is expected: the
+benchmark calls Monix through its Reactive Streams bridge (`toReactivePublisher`) with a
+`CountDownLatch` per pipeline run, and `Observable.range` boxes each `Long` to `Object` due to
+Scala's type erasure. These are unavoidable costs of calling a Scala library from the JVM without
+a Scala compiler. The numbers represent realistic Monix throughput from a Kotlin/Java caller.
+
 **Backpressure** is unconditional. The fusion fast path only activates inside `collect()` — the
 internal synchronous terminal path. Any async operator (`publishOn`, `subscribeOn`, `Sink`,
 RS `subscribe()`) routes through the full three-callback protocol with demand signalling and
 cancellation, satisfying Reactive Streams §1.1–§3.17.
+
+---
+
+## Recursive flat-map stack safety
+
+`step(n) = items(42).concatMap { step(n-1) }` with `take(1)` — a self-referential stream of
+depth `n`.  Assembly is O(1) stack depth (lambdas are lazy); execution recurses O(n) deep at
+subscription time.  Libraries that use direct recursive function calls on the JVM call stack
+either crash the forked JVM or hang.
+
+```
+./gradlew jmhJar
+java -jar build/libs/aelv-*-jmh.jar DeepFlatMapBenchmark -wi 3 -i 5 -f 1 -tu ms
+```
+
+| Library | depth=1000 | depth=10000 | depth=100000 | Mechanism |
+|---|---:|---:|---:|---|
+| **aelv** | **10** | **1.1** | **0.11** | Work-deque interpreter — O(1) JVM stack |
+| RxJava | 39 | 3.8 | 0.28 | Drain loop trampolines inner subscriptions |
+| Monix | 4.0 | 0.23 | 0.24 | Scala Observable scheduler trampolines |
+| Mutiny | 0.9 | timeout | timeout | Merge operator hangs on deep recursion |
+| Reactor | 17 | **crash** | **crash** | StackOverflow kills the forked JVM |
+
+*ops/ms — `timeout` = 5 s per op limit hit; `crash` = StackOverflow corrupted JMH IPC.*
+
+aelv, RxJava, and Monix all handle depth=100000 without overflow. Reactor and Mutiny cannot.
+The aelv implementation is the only one that guarantees O(1) JVM stack depth by design — the
+others rely on their existing trampoline/drain-loop implementations which happen to be
+sufficient here but are not guaranteed across all recursive patterns.

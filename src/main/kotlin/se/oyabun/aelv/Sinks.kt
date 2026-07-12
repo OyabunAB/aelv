@@ -16,6 +16,7 @@
 package se.oyabun.aelv
 
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
@@ -42,24 +43,26 @@ sealed class Sink<T : Any>(
     private val bufferSize: Int,
 ) {
     private val lock        = ReentrantLock()
-    private val terminal    = AtomicReference<Signal.Upstream<T>?>(null)
+    private val terminal    = AtomicReference<Any>(Unset)
     private val history     = ArrayDeque<Signal.Upstream.Next<T>>()
     private val subscribers = CopyOnWriteArrayList<Channel<Signal.Upstream<T>>>()
 
     suspend fun emit(value: T) {
-        if (terminal.get() != null) return
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
+            if (terminal.get() !== Unset) return
             if (historySize > 0) {
                 history.addLast(signal)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
         }
-        for (ch in subscribers) ch.send(signal)
+        for (ch in subscribers) {
+            try { ch.send(signal) } catch (_: ClosedSendChannelException) {}
+        }
     }
 
     fun tryEmit(value: T): Boolean {
-        if (terminal.get() != null) return false
+        if (terminal.get() !== Unset) return false
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
             if (historySize > 0) {
@@ -78,7 +81,7 @@ sealed class Sink<T : Any>(
     fun error(cause: AelvException) = terminate(Signal.Upstream.Error(cause))
 
     private fun terminate(signal: Signal.Upstream<T>) {
-        if (!terminal.compareAndSet(null, signal)) return
+        if (!terminal.compareAndSet(Unset, signal)) return
         for (ch in subscribers) {
             ch.trySend(signal)
             ch.close()
@@ -97,9 +100,14 @@ sealed class Sink<T : Any>(
                 return@generate
             }
         }
-        terminal.get()?.let { t ->
+        val t = terminal.get()
+        if (t !== Unset) {
             subscribers.remove(ch)
-            emit(t)
+            when (t) {
+                is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
+                is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(t.cause))
+                else                        -> {}
+            }
             return@generate
         }
         try {
@@ -111,40 +119,35 @@ sealed class Sink<T : Any>(
         }
     }
 
-    fun asOne(): One<T> = Many.generate<T> { emit ->
+    fun asOne(): One<T> = One.generate { emit ->
         val ch = Channel<Signal.Upstream<T>>(bufferSize)
         val replay = lock.withLock {
             subscribers.add(ch)
             history.toList()
         }
-        var done = false
-        for (item in replay) {
-            val downstream = emit(item)
-            if (item is Signal.Upstream.Next || downstream == Signal.Downstream.Cancel) {
-                done = true; break
-            }
-        }
-        if (!done) {
-            terminal.get()?.let { t ->
-                subscribers.remove(ch)
-                emit(t)
+        try {
+            for (item in replay) {
+                emit(item)
+                emit(Signal.Upstream.Complete)
                 return@generate
             }
-            try {
-                for (signal in ch) {
-                    val downstream = emit(signal)
-                    if (signal is Signal.Upstream.Next || downstream == Signal.Downstream.Cancel) break
+            val t = terminal.get()
+            if (t !== Unset) {
+                when (t) {
+                    is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
+                    is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(t.cause))
+                    else                        -> {}
                 }
-            } finally { }
-        }
-        subscribers.remove(ch)
-    }.let { many ->
-        One.generate { emit ->
-            many.source(
-                { value -> emit(Signal.Upstream.Next(value)) },
-                { emit(Signal.Upstream.Complete) },
-                { e -> emit(Signal.Upstream.Error(e)) },
-            )
+                return@generate
+            }
+            for (signal in ch) {
+                when {
+                    signal is Signal.Upstream.Next -> { emit(signal); emit(Signal.Upstream.Complete); return@generate }
+                    else -> { emit(signal); return@generate }
+                }
+            }
+        } finally {
+            subscribers.remove(ch)
         }
     }
 }

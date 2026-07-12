@@ -41,7 +41,7 @@ sealed interface Signal {
         /** Signals that the publisher has finished emitting items normally. */
         data object Complete                          : Upstream<Nothing>, Terminal
         /** Signals that the publisher encountered an error described by [cause]. */
-        data class  Error(val cause: AelvException)   : Upstream<Nothing>, Terminal
+        data class  Error(val cause: Exception)               : Upstream<Nothing>, Terminal
     }
 
     /** Signals flowing from subscriber to publisher. */
