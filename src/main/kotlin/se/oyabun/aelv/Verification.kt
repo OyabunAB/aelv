@@ -25,6 +25,7 @@ import org.reactivestreams.Subscription
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
+
 /**
  * Reactive Streams publisher verifier for aelv.
  *
@@ -52,7 +53,7 @@ class Verify<T : Any> private constructor(
     private sealed interface Terminal
     private data object Complete : Terminal
     private data object Cancel : Terminal
-    private data class Errored(val cause: Throwable) : Terminal
+    private data class Errored(val cause: Exception) : Terminal
 
     private val steps = mutableListOf<Step<T>>()
 
@@ -68,34 +69,37 @@ class Verify<T : Any> private constructor(
 
     fun completesWithError(): Throwable = runBlocking {
         val items = Channel<T>(Channel.UNLIMITED)
-        var terminalCause: Throwable? = null
+        var terminalCause: Throwable = IllegalStateException("no error received")
+        var hasError = false
 
         publisher.subscribe(object : Subscriber<T> {
             override fun onSubscribe(s: Subscription) { s.request(Long.MAX_VALUE) }
             override fun onNext(t: T)                 { items.trySend(t) }
-            override fun onError(t: Throwable)        { terminalCause = t; runCatching { items.close() } }
+            override fun onError(t: Throwable)        { terminalCause = t; hasError = true; runCatching { items.close() } }
             override fun onComplete()                 { runCatching { items.close() } }
         })
 
         withTimeout(timeout) { for (ignored in items) { } }
-        terminalCause ?: error("expected error but stream completed normally")
+        if (!hasError) error("expected error but stream completed normally")
+        terminalCause
     }
 
     private fun execute(expectComplete: Boolean) = runBlocking {
         val items      = Channel<T>(Channel.UNLIMITED)
-        var terminal: Terminal? = null
-        var subscription: Subscription? = null
+        var terminal: Terminal = Complete
+        var terminalSet = false
+        var subscription: SubscriptionState = SubscriptionState.Unbound
         val subscribed = Channel<Unit>(1)
 
         publisher.subscribe(object : Subscriber<T> {
             override fun onSubscribe(s: Subscription) {
-                subscription = s
+                subscription = SubscriptionState.Bound(s)
                 subscribed.trySend(Unit)
                 s.request(Long.MAX_VALUE)
             }
             override fun onNext(t: T)          { items.trySend(t) }
-            override fun onError(t: Throwable) { terminal = Errored(t); runCatching { items.close() } }
-            override fun onComplete()          { if (terminal == null) { terminal = Complete }; runCatching { items.close() } }
+            override fun onError(t: Throwable) { terminal = Errored(if (t is Exception) t else RuntimeException(t)); terminalSet = true; runCatching { items.close() } }
+            override fun onComplete()          { if (!terminalSet) { terminal = Complete; terminalSet = true }; runCatching { items.close() } }
         })
 
         withTimeout(timeout) { subscribed.receive() }
@@ -104,7 +108,13 @@ class Verify<T : Any> private constructor(
             when (step) {
                 is Step.IsSubscribed  -> Unit
                 is Step.Runs          -> step.action()
-                is Step.ThenCancels   -> { subscription?.cancel(); terminal = Cancel; break }
+                is Step.ThenCancels   -> {
+                    when (val s = subscription) {
+                        is SubscriptionState.Bound   -> s.sub.cancel()
+                        is SubscriptionState.Unbound -> Unit
+                    }
+                    terminal = Cancel; break
+                }
                 is Step.EmitsNext     -> for (expected in step.values) {
                     val actual = withTimeout(timeout) { items.receive() }
                     check(actual == expected) { "expected $expected but got $actual" }
@@ -120,7 +130,7 @@ class Verify<T : Any> private constructor(
         }
 
         if (expectComplete) {
-            withTimeout(timeout) { while (terminal == null) delay(1) }
+            withTimeout(timeout) { while (!terminalSet && terminal == Complete) delay(1) }
             when (terminal) {
                 is Errored -> throw AssertionError("expected complete but got error: ${(terminal as Errored).cause}", (terminal as Errored).cause)
                 Complete   -> Unit

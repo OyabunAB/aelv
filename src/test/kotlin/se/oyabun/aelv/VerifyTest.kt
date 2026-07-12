@@ -26,7 +26,7 @@ class VerifyTest {
 
     @Test
     fun `emitsNext matches items in order`() {
-        Verify.that(Many.of(1, 2, 3))
+        Verify.that(Many.items(1, 2, 3))
             .emitsNext(1, 2, 3)
             .completesNormally()
     }
@@ -34,7 +34,7 @@ class VerifyTest {
     @Test
     fun `emitsNext fails on wrong value`() {
         assertFailsWith<IllegalStateException> {
-            Verify.that(Many.of(1, 2, 3))
+            Verify.that(Many.items(1, 2, 3))
                 .emitsNext(1, 99, 3)
                 .completesNormally()
         }
@@ -42,14 +42,14 @@ class VerifyTest {
 
     @Test
     fun `emitsCount accepts n items`() {
-        Verify.that(Many.of(1, 2, 3))
+        Verify.that(Many.items(1, 2, 3))
             .emitsCount(3)
             .completesNormally()
     }
 
     @Test
     fun `matchesNext asserts item`() {
-        Verify.that(Many.of(42))
+        Verify.that(Many.items(42))
             .matchesNext { assertTrue(it > 40) }
             .completesNormally()
     }
@@ -57,7 +57,7 @@ class VerifyTest {
     @Test
     fun `runs executes side effect between steps`() {
         var fired = false
-        Verify.that(Many.of(1, 2))
+        Verify.that(Many.items(1, 2))
             .emitsNext(1)
             .runs { fired = true }
             .emitsNext(2)
@@ -67,7 +67,7 @@ class VerifyTest {
 
     @Test
     fun `thenCancels stops subscription`() {
-        Verify.that(Many.of(1, 2, 3))
+        Verify.that(Many.items(1, 2, 3))
             .emitsNext(1)
             .thenCancels()
             .verify()
@@ -90,7 +90,7 @@ class VerifyTest {
 
     @Test
     fun `isSubscribed is a no-op checkpoint`() {
-        Verify.that(Many.of(1))
+        Verify.that(Many.items(1))
             .isSubscribed()
             .emitsNext(1)
             .completesNormally()

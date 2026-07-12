@@ -58,9 +58,9 @@ class BackpressureTest {
             emit(Signal.Upstream.Complete)
         }
 
-        val result = source.take(3).toList().get()
+        val result = source.take(3).toList().await()
 
-        assertIs<Either.Left<List<Int>>>(result)
+        assertIs<Either.Right<List<Int>>>(result)
         assertEquals(listOf(0, 1, 2), result.value)
         assertEquals(
             3L,
@@ -90,9 +90,9 @@ class BackpressureTest {
             emit(Signal.Upstream.Complete)
         }
 
-        val result = source.takeWhile { it < 3 }.toList().get()
+        val result = source.takeWhile { it < 3 }.toList().await()
 
-        assertIs<Either.Left<List<Int>>>(result)
+        assertIs<Either.Right<List<Int>>>(result)
         assertEquals(listOf(0, 1, 2), result.value)
         assertTrue(
             produced.get() <= 4L,
@@ -120,7 +120,7 @@ class BackpressureTest {
         val maxObserved = AtomicInteger(0)
 
         withContext(Dispatchers.Default) {
-            Many.of(1, 2, 3, 4, 5, 6, 7, 8)
+            Many.items(1, 2, 3, 4, 5, 6, 7, 8)
                 .flatMap(concurrency = 4) { item ->
                     Many.generate { emit ->
                         // Yield to let the scheduler interleave all 4 active coroutines.
@@ -136,7 +136,7 @@ class BackpressureTest {
                     inFlight.decrementAndGet()
                 }
                 .toList()
-                .get()
+                .await()
         }
 
         assertEquals(
@@ -167,14 +167,14 @@ class BackpressureTest {
         runBlocking(Dispatchers.Default) {
             val result = withTimeout(3.seconds) {
                 zip(
-                    Many.of(1, 2),
-                    Many.of((1..200).map { "x$it" }),
+                    Many.items(1, 2),
+                    Many.from((1..200).map { "x$it" }),
                 ) { n, s -> "$n$s" }
                     .toList()
-                    .get()
+                    .await()
             }
 
-            assertIs<Either.Left<List<String>>>(result)
+            assertIs<Either.Right<List<String>>>(result)
             assertEquals(
                 listOf("1x1", "2x2"),
                 result.value,
@@ -210,7 +210,7 @@ class BackpressureTest {
         source
             .doOnNext { inFlight.decrementAndGet() }
             .toList()
-            .get()
+            .await()
 
         assertEquals(
             1,
@@ -247,7 +247,7 @@ class BackpressureTest {
             .buffer(bufferSize)
             .doOnNext { consumed.addAndGet(it.size) }
             .toList()
-            .get()
+            .await()
 
         assertTrue(
             peakBuffered.get() <= bufferSize + 1, // +1 for the item in transit
@@ -274,7 +274,7 @@ class BackpressureTest {
             emit(Signal.Upstream.Complete)
         }
 
-        source.skip(skip).take(take).toList().get()
+        source.skip(skip).take(take).toList().await()
 
         assertEquals(
             skip + take,
@@ -296,27 +296,27 @@ class BackpressureTest {
     //      even after the other coroutine has written a real value, due to the
     //      missing memory barrier. A subsequent cast of Unset to B throws
     //      ClassCastException, which propagates as UpstreamErrorException and
-    //      becomes Either.Right from toList().get().
+    //      becomes Either.Left from toList().await().
     //
     // On x86 with a modern JIT the memory visibility failure is uncommon because
     // the hardware memory model is already strong. This test catches it when it
     // occurs; the bug is definitively present in the source regardless. A
     // reliable deterministic catch requires JVM tooling (-XX:+StressLCM or TSan).
     //
-    // Any Either.Right from toList().get() is a definitive failure.
+    // Any Either.Left from toList().await() is a definitive failure.
     // -------------------------------------------------------------------------
 
     @Test
     fun `combineLatest — shared state is safely published across coroutines (RS 1_3)`() {
         var failIteration = -1
-        var failResult: AelvException? = null
+        var failResult: Throwable? = null
 
         runBlocking(Dispatchers.Default) {
             for (i in 0 until 100) {
                 val n = 200
                 val outcome = combineLatest(
-                    Many.of((1..n).toList()),
-                    Many.of((1..n).toList()),
+                    Many.from((1..n).toList()),
+                    Many.from((1..n).toList()),
                 ) { a, b ->
                     // Unset cast to Int throws ClassCastException (stale read).
                     // Out-of-range sum is a logical torn-read indicator.
@@ -327,9 +327,9 @@ class BackpressureTest {
                     sum
                 }
                     .toList()
-                    .get()
+                    .await()
 
-                if (outcome is Either.Right) {
+                if (outcome is Either.Left) {
                     failIteration = i
                     failResult = outcome.value
                     break
@@ -340,7 +340,7 @@ class BackpressureTest {
         assertEquals(
             -1,
             failIteration,
-            "RS 1.3: combineLatest produced Either.Right on iteration $failIteration — " +
+            "RS 1.3: combineLatest produced Either.Left on iteration $failIteration — " +
                 "torn read or concurrent emit: ${failResult?.message}"
         )
     }

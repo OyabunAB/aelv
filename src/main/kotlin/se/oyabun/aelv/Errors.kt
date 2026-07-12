@@ -16,15 +16,18 @@
 package se.oyabun.aelv
 
 /**
- * A value of either type [A] (left) or type [B] (right).
+ * A value of either type [A] (left — error) or type [B] (right — success).
  *
- * Used throughout aelv as the return type of terminal operators: the left side carries the
- * success value; the right side carries an [AelvException].
+ * Convention: [Left] carries the error; [Right] carries the success value.
+ * This aligns with the standard FP convention (Arrow, Haskell, Scala) where
+ * "right" means correct.
+ *
+ * Used throughout aelv as the return type of terminal operators.
  */
 sealed class Either<out A, out B> {
-    /** The successful outcome, carrying [value] of type [A]. */
+    /** The error outcome, carrying [value] of type [A]. */
     data class Left<out A>(val value: A) : Either<A, Nothing>()
-    /** The failure or secondary outcome, carrying [value] of type [B]. */
+    /** The success outcome, carrying [value] of type [B]. */
     data class Right<out B>(val value: B) : Either<Nothing, B>()
 
     /** Returns true if this is a [Left]. */
@@ -40,7 +43,7 @@ sealed class Either<out A, out B> {
     /** Returns the [Left] value, or throws the [Right] value if it is a [Throwable], otherwise throws [IllegalStateException]. */
     fun leftOrThrow(): A = when (this) {
         is Left  -> value
-        is Right -> throw if (value is Throwable) value else IllegalStateException("Either.Right: $value")
+        is Right -> throw if (value is Throwable) value else IllegalStateException("Either.Left: $value")
     }
 
     /** Collapses both sides to [C] by applying [onLeft] or [onRight]. */
@@ -62,10 +65,19 @@ sealed class Either<out A, out B> {
     }
 }
 
-/** Wraps this value as [Either.Left]. */
-fun <A> A.left(): Either<A, Nothing> = Either.Left(this)
-/** Wraps this value as [Either.Right]. */
+/** Wraps this value as [Either.Right] — the success side. */
 fun <B> B.right(): Either<Nothing, B> = Either.Right(this)
+/** Wraps this value as [Either.Left] — the error side. */
+fun <A> A.left(): Either<A, Nothing> = Either.Left(this)
+
+/**
+ * Returns the [Right] value, or throws the [Left] value if it is a [Throwable],
+ * otherwise throws [IllegalStateException].
+ */
+fun <A : Throwable, B> Either<A, B>.rightOrThrow(): B = when (this) {
+    is Either.Right -> value
+    is Either.Left  -> throw value
+}
 
 /**
  * Base class for all exceptions thrown or signalled by aelv.
@@ -83,6 +95,6 @@ class InvalidDemandException(n: Long) :
 class NoSuchElementException :
     AelvException("stream completed without emitting a value")
 
-/** Wraps a non-[AelvException] throwable received from an upstream publisher. */
-class UpstreamErrorException(cause: Throwable) :
-    AelvException("upstream publisher signalled an error", cause)
+/** Signals that a [One.await] call did not receive a value within the specified duration. */
+class TimeoutException(timeout: kotlin.time.Duration) :
+    AelvException("await timed out after $timeout")

@@ -15,6 +15,7 @@
  */
 package se.oyabun.aelv
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -26,19 +27,19 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import org.reactivestreams.Publisher
 
 private val log = Logging.of<Many<*>>()
 
-/** Transforms each item by applying [transform] to it. */
 fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
-    val f = fusion
-    return Many.fused(if (f is Fusion.Available) MapFusion(f, transform) else Fusion.None) { onNext, onComplete, onError ->
-        source({ value -> onNext(transform(value)) }, onComplete, onError)
-    }
+    val currentFusion = fusion
+    return Many.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
 }
 
 /**
@@ -46,61 +47,28 @@ fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
  * Null results are silently dropped and demand is replenished from upstream.
  */
 fun <T : Any, R : Any> Many<T>.mapNotNull(transform: (T) -> R?): Many<R> =
-    Many.build { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError ->
         source(
-            { value -> val r = transform(value); if (r != null) onNext(r) else Signal.Downstream.Request },
+            { value -> val result = transform(value); if (result != null) onNext(result) else Signal.Downstream.Request },
             onComplete,
             onError,
         )
     }
 
-/** Emits only items for which [predicate] returns true. */
 fun <T : Any> Many<T>.filter(predicate: (T) -> Boolean): Many<T> {
-    val f = fusion
-    return Many.fused(if (f is Fusion.Available) FilterFusion(f, predicate) else Fusion.None) { onNext, onComplete, onError ->
-        source(
-            { value -> if (predicate(value)) onNext(value) else Signal.Downstream.Request },
-            onComplete,
-            onError,
-        )
-    }
+    val currentFusion = fusion
+    return Many.fromStep(Step.Filter(step, predicate), if (currentFusion is Fusion.Available) FilterFusion(currentFusion, predicate) else Fusion.None)
 }
 
 /** Emits at most [n] items then completes.  Requires `n >= 0`. */
 fun <T : Any> Many<T>.take(n: Long): Many<T> {
     require(n >= 0) { "take count must be non-negative, got $n" }
-    val f = fusion
-    val slowPath: suspend (
-        onNext: suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError: suspend (AelvException) -> Unit,
-    ) -> Unit = block@{ onNext, onComplete, onError ->
-        if (n == 0L) { onComplete(); return@block }
-        var remaining = n
-        source(
-            { value ->
-                when {
-                    remaining == 0L -> Signal.Downstream.Cancel
-                    else -> {
-                        val downstream = onNext(value)
-                        remaining--
-                        if (remaining == 0L) {
-                            if (downstream != Signal.Downstream.Cancel) onComplete()
-                            Signal.Downstream.Cancel
-                        } else downstream
-                    }
-                }
-            },
-            onComplete,
-            onError,
-        )
-    }
-    return Many.fused(if (f is Fusion.Available) TakeFusion(f, n) else Fusion.None, slowPath)
+    val currentFusion = fusion
+    return Many.fromStep(Step.Take(step, n), if (currentFusion is Fusion.Available) TakeFusion(currentFusion, n) else Fusion.None)
 }
 
-/** Emits items while [predicate] returns true; completes on the first non-matching item. */
 fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
-    Many.build { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError ->
         source(
             { value ->
                 if (predicate(value)) onNext(value)
@@ -114,19 +82,11 @@ fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
 /** Drops the first [n] items then emits the rest.  Requires `n >= 0`. */
 fun <T : Any> Many<T>.skip(n: Long): Many<T> {
     require(n >= 0) { "skip count must be non-negative, got $n" }
-    return Many.build { onNext, onComplete, onError ->
-        var skipped = 0L
-        source(
-            { value -> if (skipped < n) { skipped++; Signal.Downstream.Request } else onNext(value) },
-            onComplete,
-            onError,
-        )
-    }
+    return Many.fromStep(Step.Skip(step, n))
 }
 
-/** Drops items while [predicate] returns true; emits all items once the predicate first returns false. */
 fun <T : Any> Many<T>.skipWhile(predicate: (T) -> Boolean): Many<T> =
-    Many.build { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError ->
         var skipping = true
         source(
             { value ->
@@ -138,16 +98,15 @@ fun <T : Any> Many<T>.skipWhile(predicate: (T) -> Boolean): Many<T> =
         )
     }
 
-/** Emits only items that have not been seen before, using [equals] for comparison. */
 fun <T : Any> Many<T>.distinct(): Many<T> =
-    Many.build { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError ->
         val seen = HashSet<T>()
         source({ value -> if (seen.add(value)) onNext(value) else Signal.Downstream.Request }, onComplete, onError)
     }
 
 /** Suppresses consecutive duplicate items; non-adjacent duplicates are still emitted. */
 fun <T : Any> Many<T>.distinctUntilChanged(): Many<T> =
-    Many.build { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError ->
         var last: Any = Unset
         source(
             { value -> if (value != last) { last = value; onNext(value) } else Signal.Downstream.Request },
@@ -156,9 +115,8 @@ fun <T : Any> Many<T>.distinctUntilChanged(): Many<T> =
         )
     }
 
-/** Suppresses consecutive items whose [key] projection produces the same value. */
 fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
-    Many.build { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError ->
         var lastKey: Any = Unset
         source(
             { value ->
@@ -181,73 +139,12 @@ fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
 fun <T : Any, R : Any> Many<T>.flatMap(
     concurrency: Int = 256,
     transform: (T) -> Many<R>,
-): Many<R> = if (concurrency == 1) concatMap(transform) else Many.generate { emit ->
-    val semaphore = Semaphore(concurrency)
-    val mutex     = Mutex()
-    var cancelled = false
-    var outerError: AelvException? = null
-    coroutineScope {
-        source(
-            { value ->
-                if (cancelled) return@source Signal.Downstream.Cancel
-                semaphore.acquire()
-                try {
-                    transform(value).source(
-                        { inner ->
-                            mutex.withLock {
-                                if (cancelled) Signal.Downstream.Cancel
-                                else {
-                                    val downstream = emit(Signal.Upstream.Next(inner))
-                                    if (downstream == Signal.Downstream.Cancel) cancelled = true
-                                    downstream
-                                }
-                            }
-                        },
-                        {},
-                        { e -> mutex.withLock { if (outerError == null) outerError = e } },
-                    )
-                } finally {
-                    semaphore.release()
-                }
-                Signal.Downstream.Request
-            },
-            {},
-            { e -> outerError = e },
-        )
-    }
-    when {
-        cancelled          -> {}
-        outerError != null -> emit(Signal.Upstream.Error(outerError!!))
-        else               -> emit(Signal.Upstream.Complete)
-    }
-}
+): Many<R> = if (concurrency == 1) Many.fromStep(Step.ConcatMap(step, transform))
+             else Many.fromStep(Step.FlatMap(step, concurrency, transform))
 
 /** Maps each item to a [Many] and subscribes sequentially, preserving upstream order. */
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
-        var cancelled = false
-        var outerError: AelvException? = null
-        source(
-            { value ->
-                if (cancelled) return@source Signal.Downstream.Cancel
-                transform(value).source(
-                    { inner ->
-                        val downstream = emit(Signal.Upstream.Next(inner))
-                        if (downstream == Signal.Downstream.Cancel) cancelled = true
-                        downstream
-                    },
-                    {},
-                    { e -> outerError = e },
-                )
-                if (cancelled) Signal.Downstream.Cancel else Signal.Downstream.Request
-            },
-            {
-                if (outerError != null) emit(Signal.Upstream.Error(outerError!!))
-                else emit(Signal.Upstream.Complete)
-            },
-            { e -> emit(Signal.Upstream.Error(e)) },
-        )
-    }
+    Many.fromStep(Step.ConcatMap(step, transform))
 
 /**
  * Maps each item to a [Many], subscribing to up to [maxConcurrency] inner streams concurrently,
@@ -265,7 +162,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
     val orderChannel = Channel<Channel<Signal.Upstream<R>>>(maxConcurrency)
     coroutineScope {
         val producerJob = launch {
-            var outerError: Signal.Upstream.Error? = null
+            var outerError: Any = Unset
             source(
                 { value ->
                     semaphore.acquire()
@@ -286,27 +183,33 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                     Signal.Downstream.Request
                 },
                 { },
-                { e -> outerError = Signal.Upstream.Error(e) },
+                { e -> outerError = e },
             )
-            orderChannel.send(Channel<Signal.Upstream<R>>(0).also { it.close(outerError?.cause) })
+            val sentinel = Channel<Signal.Upstream<R>>(0)
+            if (outerError.isError()) sentinel.close(outerError.asError()) else sentinel.close()
+            orderChannel.send(sentinel)
             orderChannel.close()
         }
         var cancelled = false
         for (innerChannel in orderChannel) {
             if (cancelled) { innerChannel.cancel(); continue }
-            for (signal in innerChannel) {
-                when (signal) {
-                    is Signal.Upstream.Next -> if (emit(signal) == Signal.Downstream.Cancel) {
-                        cancelled = true; producerJob.cancel(); break
+            try {
+                for (signal in innerChannel) {
+                    when (signal) {
+                        is Signal.Upstream.Next -> if (emit(signal) == Signal.Downstream.Cancel) {
+                            cancelled = true; producerJob.cancel(); break
+                        }
+                        else -> break
                     }
-                    else -> break
                 }
-            }
-            val failure = innerChannel.receiveCatching().exceptionOrNull()
-            if (failure != null && !cancelled) {
-                cancelled = true
-                producerJob.cancel()
-                emit(Signal.Upstream.Error(if (failure is AelvException) failure else UpstreamErrorException(failure)))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!cancelled) {
+                    cancelled = true
+                    producerJob.cancel()
+                    emit(Signal.Upstream.Error(e))
+                }
             }
         }
         if (!cancelled) emit(Signal.Upstream.Complete)
@@ -322,10 +225,10 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
         val channel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
         coroutineScope {
             val producerJob = launch {
-                var activeJob: Job? = null
+                var activeJob = launch {}
                 source(
                     { value ->
-                        activeJob?.cancelAndJoin()
+                        activeJob.cancelAndJoin()
                         activeJob = launch {
                             transform(value).source(
                                 { inner -> channel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
@@ -336,11 +239,11 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
                         Signal.Downstream.Request
                     },
                     {
-                        activeJob?.join()
+                        activeJob.join()
                         channel.send(Signal.Upstream.Complete)
                     },
                     { e ->
-                        activeJob?.cancelAndJoin()
+                        activeJob.cancelAndJoin()
                         channel.send(Signal.Upstream.Error(e))
                     },
                 )
@@ -390,7 +293,6 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
         }
     }
 
-/** Merges this [Many] with [other], interleaving items as they arrive. */
 fun <T : Any> Many<T>.mergeWith(other: Many<T>): Many<T> = merge(this, other)
 
 /**
@@ -400,16 +302,13 @@ fun <T : Any> Many<T>.mergeWith(other: Many<T>): Many<T> = merge(this, other)
  */
 fun <T : Any> Many<T>.delaySubscription(trigger: Publisher<*>): Many<T> =
     Many.generate { emit ->
-        var triggerError: AelvException? = null
+        var triggerFailed = false
         Many.from(trigger).source(
             { Signal.Downstream.Cancel },
             { },
-            { e -> triggerError = e },
+            { e -> triggerFailed = true; emit(Signal.Upstream.Error(e)) },
         )
-        if (triggerError != null) {
-            emit(Signal.Upstream.Error(triggerError!!))
-            return@generate
-        }
+        if (triggerFailed) return@generate
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
@@ -489,57 +388,36 @@ fun <T : Any> concat(vararg sources: Many<T>): Many<T> =
  */
 fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
     Many.generate { emit ->
-        // Errors are propagated by closing each channel with a cause — RS 1.3.
-        val channelA = Channel<A>(Channel.BUFFERED)
-        val channelB = Channel<B>(Channel.BUFFERED)
+        val channelA = Channel<Signal.Upstream<A>>(Channel.BUFFERED)
+        val channelB = Channel<Signal.Upstream<B>>(Channel.BUFFERED)
         coroutineScope {
             val jobA = launch {
                 a.source(
-                    { value -> channelA.send(value); Signal.Downstream.Request },
-                    { channelA.close() },
-                    { e -> channelA.close(e) },
+                    { value -> channelA.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
+                    { channelA.send(Signal.Upstream.Complete) },
+                    { e -> channelA.send(Signal.Upstream.Error(e)) },
                 )
             }
             val jobB = launch {
                 b.source(
-                    { value -> channelB.send(value); Signal.Downstream.Request },
-                    { channelB.close() },
-                    { e -> channelB.close(e) },
+                    { value -> channelB.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
+                    { channelB.send(Signal.Upstream.Complete) },
+                    { e -> channelB.send(Signal.Upstream.Error(e)) },
                 )
             }
-            var error: AelvException? = null
-            loop@ for (itemA in channelA) {
-                val rb = channelB.receiveCatching()
-                when {
-                    rb.isFailure -> {
-                        val cause = rb.exceptionOrNull()
-                        error = if (cause is AelvException) cause else cause?.let { UpstreamErrorException(it) }
-                        break@loop
-                    }
-                    rb.isClosed  -> break@loop
-                    else         -> {
-                        if (emit(Signal.Upstream.Next(transform(itemA, rb.getOrThrow()))) == Signal.Downstream.Cancel) break@loop
-                    }
+            var zipError: Any = Unset
+            while (when (val signalA = channelA.receive()) {
+                is Signal.Upstream.Complete -> false
+                is Signal.Upstream.Error    -> { zipError = signalA.cause; false }
+                is Signal.Upstream.Next     -> when (val signalB = channelB.receive()) {
+                    is Signal.Upstream.Complete -> false
+                    is Signal.Upstream.Error    -> { zipError = signalB.cause; false }
+                    is Signal.Upstream.Next     -> emit(Signal.Upstream.Next(transform(signalA.value, signalB.value))) != Signal.Downstream.Cancel
                 }
-            }
-            // Cancel producers before probing channelA, so we never block on it.
+            }) {}
             jobA.cancel()
             jobB.cancel()
-            if (error == null) {
-                // channelA may already be closed with a cause (source A errored after the loop
-                // exited via source B completing).  tryReceive() is non-blocking: returns a
-                // failure with the close-cause if A errored, or empty/closed if A completed
-                // normally.  We do NOT call receiveCatching() here — that would suspend if the
-                // channel is still open with no items (jobA cancelled mid-send).
-                val ac = channelA.tryReceive()
-                if (ac.isFailure) {
-                    val cause = ac.exceptionOrNull()
-                    if (cause != null) {
-                        error = if (cause is AelvException) cause else UpstreamErrorException(cause)
-                    }
-                }
-            }
-            if (error != null) emit(Signal.Upstream.Error(error!!))
+            if (zipError.isError()) emit(Signal.Upstream.Error(zipError.asError()))
             else emit(Signal.Upstream.Complete)
         }
     }
@@ -557,14 +435,14 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
         coroutineScope {
             val jobA = launch {
                 a.source(
-                    { value -> channel.send(Signal.Upstream.Next(value.left())); Signal.Downstream.Request },
+                    { value -> channel.send(Signal.Upstream.Next(Either.Left(value))); Signal.Downstream.Request },
                     { },
                     { e -> channel.send(Signal.Upstream.Error(e)) },
                 )
             }
             val jobB = launch {
                 b.source(
-                    { value -> channel.send(Signal.Upstream.Next(value.right())); Signal.Downstream.Request },
+                    { value -> channel.send(Signal.Upstream.Next(Either.Right(value))); Signal.Downstream.Request },
                     { },
                     { e -> channel.send(Signal.Upstream.Error(e)) },
                 )
@@ -693,32 +571,32 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
             val producerJob = launch {
                 source(
                     { value ->
-                        events.send(Signal.Upstream.Next(value).left())
+                        events.send(Either.Left(Signal.Upstream.Next(value)))
                         Signal.Downstream.Request
                     },
                     {
-                        events.send(Signal.Upstream.Complete.left())
+                        events.send(Either.Left(Signal.Upstream.Complete))
                     },
                     { e ->
-                        events.send(Signal.Upstream.Error(e).left())
+                        events.send(Either.Left(Signal.Upstream.Error(e)))
                     },
                 )
                 events.close()
             }
             val bucket = mutableListOf<T>()
-            var timerJob: Job? = null
+            var timerJob: Job = Job().also { it.complete() }
 
             fun resetTimer() {
-                timerJob?.cancel()
-                timerJob = launch { delay(timeout); events.trySend(Unit.right()) }
+                timerJob.cancel()
+                timerJob = launch { delay(timeout); events.trySend(Either.Right(Unit)) }
             }
 
             suspend fun flushBucket(): Boolean {
                 if (bucket.isEmpty()) return true
                 val downstream = emit(Signal.Upstream.Next(bucket.toList()))
                 bucket.clear()
-                timerJob?.cancel()
-                timerJob = null
+                timerJob.cancel()
+                timerJob = Job().also { it.complete() }
                 return downstream != Signal.Downstream.Cancel
             }
 
@@ -726,7 +604,6 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
             for (event in events) {
                 when (event) {
                     is Either.Right -> {
-                        // Timer fired — flush current bucket.
                         if (!flushBucket()) { producerJob.cancel(); terminated = true; break }
                     }
                     is Either.Left -> when (val signal = event.value) {
@@ -738,12 +615,12 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                             }
                         }
                         is Signal.Upstream.Complete -> {
-                            timerJob?.cancel()
+                            timerJob.cancel()
                             flushBucket()
                             break
                         }
                         is Signal.Upstream.Error -> {
-                            timerJob?.cancel()
+                            timerJob.cancel()
                             emit(Signal.Upstream.Error(signal.cause))
                             terminated = true
                             break
@@ -751,7 +628,7 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                     }
                 }
             }
-            timerJob?.cancel()
+            timerJob.cancel()
             if (!terminated) emit(Signal.Upstream.Complete)
         }
     }
@@ -861,7 +738,6 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
         }
     }
 
-/** Invokes [action] for each item without modifying the stream. */
 fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
     Many.generate { emit ->
         source(
@@ -871,7 +747,6 @@ fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
         )
     }
 
-/** Invokes [action] when the stream completes normally, without modifying the stream. */
 fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
     Many.generate { emit ->
         source(
@@ -881,8 +756,7 @@ fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
         )
     }
 
-/** Invokes [action] when the stream signals an error, without modifying the stream. */
-fun <T : Any> Many<T>.doOnError(action: (AelvException) -> Unit): Many<T> =
+fun <T : Any> Many<T>.doOnError(action: (Exception) -> Unit): Many<T> =
     Many.generate { emit ->
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
@@ -891,7 +765,6 @@ fun <T : Any> Many<T>.doOnError(action: (AelvException) -> Unit): Many<T> =
         )
     }
 
-/** Invokes [action] when a subscriber subscribes to this stream, before any items are emitted. */
 fun <T : Any> Many<T>.doOnSubscribe(action: () -> Unit): Many<T> =
     Many.generate { emit ->
         action()
@@ -923,10 +796,10 @@ fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
  * On error, switches to the [Many] returned by [fallback], continuing from there.
  * On normal completion, [fallback] is not invoked.
  */
-fun <T : Any> Many<T>.recover(fallback: (AelvException) -> Many<T>): Many<T> =
+fun <T : Any> Many<T>.recover(fallback: (Exception) -> Many<T>): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Either.Right) fallback(result.value).source(
+        if (result is Either.Left) fallback(result.value).source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
             { e -> emit(Signal.Upstream.Error(e)) },
@@ -938,12 +811,12 @@ fun <T : Any> Many<T>.recover(fallback: (AelvException) -> Many<T>): Many<T> =
  * On error, emits the single value returned by [fallback] and then completes.
  * On normal completion, [fallback] is not invoked.
  */
-fun <T : Any> Many<T>.recoverWith(fallback: (AelvException) -> T): Many<T> =
+fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
         when (result) {
-            is Either.Left  -> emit(Signal.Upstream.Complete)
-            is Either.Right -> {
+            is Either.Right  -> emit(Signal.Upstream.Complete)
+            is Either.Left -> {
                 if (emit(Signal.Upstream.Next(fallback(result.value))) != Signal.Downstream.Cancel)
                     emit(Signal.Upstream.Complete)
             }
@@ -964,8 +837,8 @@ fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
         while (true) {
             val result = collect { emit(Signal.Upstream.Next(it)) }
             when {
-                result is Either.Left                           -> break
-                !policy.filter((result as Either.Right).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
+                result is Either.Right                           -> break
+                !policy.filter((result as Either.Left).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
                 attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
                     log.operator.retrying("retry", attempts, result.value)
@@ -1015,23 +888,21 @@ fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R
     One.generate { emit ->
         var valueA: Any = Unset
         val resultA = a.collect { v -> valueA = v; Signal.Downstream.Cancel }
-        if (resultA.isRight()) { emit(Signal.Upstream.Error(resultA.rightOrNull()!!)); return@generate }
+        if (resultA is Either.Left) { emit(Signal.Upstream.Error(resultA.value)); return@generate }
         if (valueA === Unset) { emit(Signal.Upstream.Complete); return@generate }
         var valueB: Any = Unset
         val resultB = b.collect { v -> valueB = v; Signal.Downstream.Cancel }
-        if (resultB.isRight()) { emit(Signal.Upstream.Error(resultB.rightOrNull()!!)); return@generate }
+        if (resultB is Either.Left) { emit(Signal.Upstream.Error(resultB.value)); return@generate }
         if (valueB === Unset) { emit(Signal.Upstream.Complete); return@generate }
         @Suppress("UNCHECKED_CAST")
-        val r = transform(valueA as A, valueB as B)
-        if (emit(Signal.Upstream.Next(r)) != Signal.Downstream.Cancel)
+        val result = transform(valueA as A, valueB as B)
+         if (emit(Signal.Upstream.Next(result)) != Signal.Downstream.Cancel)
             emit(Signal.Upstream.Complete)
     }
 
-/** Pairs the value of this [One] with [other], applying [transform] to produce the result. */
 fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) -> R): One<R> =
     zip(this, other, transform)
 
-/** Transforms the value of this [One] by applying [transform] to it. */
 fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
     One.generate { emit ->
         source(
@@ -1041,7 +912,6 @@ fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
         )
     }
 
-/** Passes the value of this [One] to [transform] and subscribes to the resulting [One]. */
 fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
     One.generate { emit ->
         source(
@@ -1058,7 +928,6 @@ fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
         )
     }
 
-/** Passes the value of this [One] to [transform] and subscribes to the resulting [Many]. */
 fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         source(
@@ -1075,27 +944,25 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
         )
     }
 
-/** Passes the value of this [One] to [transform] and awaits the resulting [None]. */
 fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
     None.generate {
-        var error: AelvException? = null
+        var failed = false
         source(
             { value ->
                 val innerResult = transform(value).await()
-                if (innerResult is Either.Right) { error = innerResult.value; Signal.Downstream.Cancel }
-                else Signal.Downstream.Request
+                if (innerResult is Either.Left) { failed = true; throw innerResult.value }
+                Signal.Downstream.Request
             },
             { },
-            { e -> error = e },
+            { e -> throw e },
         )
-        if (error != null) throw error!!
     }
 
 /** On error, emits the value returned by [fallback] and completes normally. */
-fun <T : Any> One<T>.recover(fallback: (AelvException) -> T): One<T> =
+fun <T : Any> One<T>.recover(fallback: (Exception) -> T): One<T> =
     One.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Either.Right) {
+        if (result is Either.Left) {
             if (emit(Signal.Upstream.Next(fallback(result.value))) == Signal.Downstream.Cancel) return@generate
         }
         emit(Signal.Upstream.Complete)
@@ -1115,8 +982,8 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
         while (true) {
             val result = collect { emit(Signal.Upstream.Next(it)) }
             when {
-                result is Either.Left                           -> break
-                !policy.filter((result as Either.Right).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
+                result is Either.Right                           -> break
+                !policy.filter((result as Either.Left).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
                 attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
                 else -> {
                     log.operator.retrying("retry", attempts, result.value)
@@ -1129,7 +996,6 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
         emit(Signal.Upstream.Complete)
     }
 
-/** Invokes [action] for the emitted value without modifying the stream. */
 fun <T : Any> One<T>.doOnNext(action: (T) -> Unit): One<T> =
     One.generate { emit ->
         source(
@@ -1139,8 +1005,7 @@ fun <T : Any> One<T>.doOnNext(action: (T) -> Unit): One<T> =
         )
     }
 
-/** Invokes [action] when the stream signals an error, without modifying the stream. */
-fun <T : Any> One<T>.doOnError(action: (AelvException) -> Unit): One<T> =
+fun <T : Any> One<T>.doOnError(action: (Exception) -> Unit): One<T> =
     One.generate { emit ->
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
@@ -1166,9 +1031,6 @@ fun <T : Any> One<T>.doFinally(action: (Signal.Terminal) -> Unit): One<T> =
         )
     }
 
-/**
- * [One] variant of [publishOn].
- */
 fun <T : Any> One<T>.publishOn(context: CoroutineContext): One<T> =
     One.generate { emit ->
         source(
@@ -1178,9 +1040,6 @@ fun <T : Any> One<T>.publishOn(context: CoroutineContext): One<T> =
         )
     }
 
-/**
- * [One] variant of [subscribeOn].
- */
 fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
     One.generate { emit ->
         withContext(currentCoroutineContext() + context) {
@@ -1195,10 +1054,10 @@ fun <T : Any> One<T>.subscribeOn(context: CoroutineContext): One<T> =
 /**
  * Suspends until this [One] emits its value or signals an error.
  *
- * Returns [Either.Left] containing the value on success, or [Either.Right] containing the
- * [AelvException] if the source errored or completed without emitting.
+ * Returns [Either.Right] containing the value on success, or [Either.Left] containing the
+ * [Exception] if the source errored or completed without emitting.
  */
-suspend fun <T : Any> One<T>.get(): Either<T, AelvException> {
+suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
     var result: Any = Unset
     val outcome = collect { value ->
         result = value
@@ -1207,12 +1066,26 @@ suspend fun <T : Any> One<T>.get(): Either<T, AelvException> {
     return when {
         result !== Unset        -> {
             @Suppress("UNCHECKED_CAST")
-            (result as T).left()
+            (result as T).right()
         }
-        outcome is Either.Right -> outcome
-        else                    -> NoSuchElementException().right()
+        outcome is Either.Left -> outcome
+        else                    -> NoSuchElementException().left()
     }
 }
+
+/**
+ * Suspends until this [One] emits its value or [timeout] elapses.
+ *
+ * Returns [Either.Right] with the value on success, or [Either.Left] with a
+ * [TimeoutException] if the timeout elapsed before a value was emitted, or with the upstream
+ * [Exception] if the source errored.
+ */
+suspend fun <T : Any> One<T>.await(timeout: Duration): Either<Exception, T> =
+    try {
+        withTimeout(timeout) { await() }
+    } catch (e: TimeoutCancellationException) {
+        TimeoutException(timeout).left()
+    }
 
 /**
  * Returns a [One] that executes the upstream source at most once and replays the result to every
@@ -1224,21 +1097,18 @@ suspend fun <T : Any> One<T>.get(): Either<T, AelvException> {
  */
 fun <T : Any> One<T>.cache(): One<T> {
     val mutex  = Mutex()
-    var cached: Either<T, AelvException>? = null
+    var cached: Any = Unset
     return One.generate { emit ->
-        val result: Either<T, AelvException> = mutex.withLock {
-            cached ?: run {
-                val r = get()
-                cached = r
-                r
-            }
+        val result: Either<Exception, T> = mutex.withLock {
+            @Suppress("UNCHECKED_CAST")
+            if (cached === Unset) await().also { cached = it } else cached as Either<Exception, T>
         }
         when (result) {
-            is Either.Left  -> {
+            is Either.Right -> {
                 if (emit(Signal.Upstream.Next(result.value)) != Signal.Downstream.Cancel)
                     emit(Signal.Upstream.Complete)
             }
-            is Either.Right -> emit(Signal.Upstream.Error(result.value))
+            is Either.Left  -> emit(Signal.Upstream.Error(result.value))
         }
     }
 }

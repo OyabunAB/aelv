@@ -29,6 +29,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
+internal sealed interface SubscriptionState {
+    data object Unbound                      : SubscriptionState
+    data class  Bound(val sub: Subscription) : SubscriptionState
+}
+
 private val dispatcher = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()) { r ->
     Thread(r, "aelv-worker").also { it.isDaemon = true }
 }.asCoroutineDispatcher()
@@ -40,28 +45,22 @@ internal class StreamSubscription<T : Any>(
     private val source: suspend (
         onNext: suspend (T) -> Signal.Downstream,
         onComplete: suspend () -> Unit,
-        onError: suspend (AelvException) -> Unit,
+        onError: suspend (Exception) -> Unit,
     ) -> Unit,
 ) : Subscription {
 
     private val log  = Logging.of<StreamSubscription<*>>()
-    private val name = subscriber::class.simpleName ?: "Subscriber"
-
-    private val subscriptionExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "aelv-${name.lowercase()}").also { it.isDaemon = true }
-    }
-    private val subscriptionDispatcher = subscriptionExecutor.asCoroutineDispatcher()
-    private val subscriptionScope = CoroutineScope(subscriptionDispatcher + SupervisorJob())
+    private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
     private val demand     = AtomicLong(0L)
     private val signal     = Channel<Unit>(Channel.UNLIMITED)
     private val terminated = AtomicBoolean(false)
     private val started    = AtomicBoolean(false)
-    private val producer   = AtomicReference<Job?>(null)
+    private val producer   = AtomicReference<Any>(Unset)
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = subscriptionScope.launch {
+        val job = sharedScope.launch {
             try {
                 source(
                     { value ->
@@ -89,7 +88,7 @@ internal class StreamSubscription<T : Any>(
                 )
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 if (terminated.compareAndSet(false, true)) {
                     log.stream.error(name, e)
                     subscriber.onError(e)
@@ -103,15 +102,12 @@ internal class StreamSubscription<T : Any>(
 
     private fun shutdown() {
         signal.close()
-        subscriptionDispatcher.close()
-        subscriptionExecutor.shutdown()
     }
 
     override fun request(n: Long) {
         if (n <= 0L) {
             if (terminated.compareAndSet(false, true)) {
-                producer.get()?.cancel()
-                signal.close()
+                val j = producer.get(); if (j !== Unset) (j as Job).cancel()
                 subscriber.onError(InvalidDemandException(n))
                 shutdown()
             }
@@ -128,7 +124,7 @@ internal class StreamSubscription<T : Any>(
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
             log.stream.cancelled(name)
-            producer.get()?.cancel()
+            val j = producer.get(); if (j !== Unset) (j as Job).cancel()
             shutdown()
         }
     }
@@ -150,20 +146,14 @@ internal class CompletionSubscription(
 ) : Subscription {
 
     private val log  = Logging.of<CompletionSubscription>()
-    private val name = subscriber::class.simpleName ?: "Subscriber"
-
-    private val subscriptionExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "aelv-${name.lowercase()}").also { it.isDaemon = true }
-    }
-    private val subscriptionDispatcher = subscriptionExecutor.asCoroutineDispatcher()
-    private val subscriptionScope = CoroutineScope(subscriptionDispatcher + SupervisorJob())
+    private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
     private val terminated = AtomicBoolean(false)
-    private val producer   = AtomicReference<Job?>(null)
+    private val producer   = AtomicReference<Any>(Unset)
 
     private fun start() {
         log.stream.subscribing(name)
-        val job = subscriptionScope.launch {
+        val job = sharedScope.launch {
             try {
                 source()
                 if (terminated.compareAndSet(false, true)) {
@@ -172,26 +162,21 @@ internal class CompletionSubscription(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 if (terminated.compareAndSet(false, true)) {
                     log.stream.error(name, e)
                     subscriber.onError(e)
                 }
-            } finally {
-                subscriptionDispatcher.close()
-                subscriptionExecutor.shutdown()
             }
         }
-        if (!producer.compareAndSet(null, job)) job.cancel()
+        if (!producer.compareAndSet(Unset, job)) job.cancel()
     }
 
     override fun request(n: Long) {
         if (n <= 0L) {
             if (terminated.compareAndSet(false, true)) {
-                producer.get()?.cancel()
+                val j = producer.get(); if (j !== Unset) (j as Job).cancel()
                 subscriber.onError(InvalidDemandException(n))
-                subscriptionDispatcher.close()
-                subscriptionExecutor.shutdown()
             }
             return
         }
@@ -202,9 +187,7 @@ internal class CompletionSubscription(
     override fun cancel() {
         if (terminated.compareAndSet(false, true)) {
             log.stream.cancelled(name)
-            producer.get()?.cancel()
-            subscriptionDispatcher.close()
-            subscriptionExecutor.shutdown()
+            val j = producer.get(); if (j !== Unset) (j as Job).cancel()
         }
     }
 }

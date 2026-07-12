@@ -42,30 +42,32 @@ private val log = Logging.of<Disposable>()
 fun <T : Any> Many<T>.subscribe(
     prefetch: Long,
     onNext: (T) -> Unit,
-    onError: (AelvException) -> Unit,
+    onError: (Exception) -> Unit,
     onComplete: () -> Unit = {},
 ): Disposable {
     require(prefetch > 0) { "prefetch must be positive, got $prefetch" }
-    var subscription: Subscription? = null
+    var subscription: SubscriptionState = SubscriptionState.Unbound
     this.subscribe(object : org.reactivestreams.Subscriber<T> {
         private var consumed = 0L
         private val threshold = (prefetch / 2).coerceAtLeast(1L)
 
         override fun onSubscribe(s: Subscription) {
-            subscription = s
+            subscription = SubscriptionState.Bound(s)
             s.request(prefetch)
         }
-
         override fun onNext(t: T) {
             onNext(t)
             if (++consumed >= threshold) {
                 consumed = 0L
-                subscription?.request(threshold)
+                when (val s = subscription) {
+                    is SubscriptionState.Bound   -> s.sub.request(threshold)
+                    is SubscriptionState.Unbound -> Unit
+                }
             }
         }
 
         override fun onError(t: Throwable) {
-            val error = t as? AelvException ?: UpstreamErrorException(t)
+            val error = if (t is Exception) t else RuntimeException(t)
             try {
                 onError(error)
             } catch (e: Exception) {
@@ -76,7 +78,10 @@ fun <T : Any> Many<T>.subscribe(
         override fun onComplete() = onComplete()
     })
     return object : Disposable {
-        override fun cancel() = subscription?.cancel() ?: Unit
+        override fun cancel() = when (val s = subscription) {
+            is SubscriptionState.Bound   -> s.sub.cancel()
+            is SubscriptionState.Unbound -> Unit
+        }
     }
 }
 
@@ -92,7 +97,7 @@ fun <T : Any> Many<T>.subscribe(
  */
 fun <T : Any> Many<T>.drain(
     onNext: (T) -> Unit,
-    onError: (AelvException) -> Unit,
+    onError: (Exception) -> Unit,
     onComplete: () -> Unit = {},
 ): Disposable = subscribe(
     prefetch = Long.MAX_VALUE,
@@ -111,21 +116,21 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
         val result = fused ?: run {
             var acc = initial
             collect { value -> acc = accumulate(acc, value); Signal.Downstream.Request }
-                .mapLeft { acc }
+                .mapRight { acc }
         }
         when (result) {
-            is Either.Left  -> { emit(Signal.Upstream.Next(result.value)); emit(Signal.Upstream.Complete) }
-            is Either.Right -> emit(Signal.Upstream.Error(result.value))
+            is Either.Right  -> { emit(Signal.Upstream.Next(result.value)); emit(Signal.Upstream.Complete) }
+            is Either.Left -> emit(Signal.Upstream.Error(result.value))
         }
     }
 
 /**
  * Reduces all items to a single value by applying [accumulate] pairwise.
  *
- * Returns a [One] that emits `Either.Left<T>` on success, or `Either.Right<AelvException>`
- * if the stream was empty or errored.
+ * Returns a [One] that emits the reduced value, or signals [NoSuchElementException] if the
+ * stream was empty, or propagates the upstream error if the stream errored.
  */
-fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvException>> =
+fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
     One.generate { emit ->
         var acc: Any = Unset
         val result = collect { item ->
@@ -133,16 +138,15 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<Either<T, AelvExcepti
             acc = if (acc === Unset) item else accumulate(acc as T, item)
             Signal.Downstream.Request
         }
-        val value: Either<T, AelvException> = when {
-            result is Either.Right -> result
-            acc === Unset          -> NoSuchElementException().right()
+        when {
+            result is Either.Left -> emit(Signal.Upstream.Error(result.value))
+            acc === Unset          -> emit(Signal.Upstream.Error(NoSuchElementException()))
             else                   -> {
                 @Suppress("UNCHECKED_CAST")
-                (acc as T).left()
+                emit(Signal.Upstream.Next(acc as T))
+                emit(Signal.Upstream.Complete)
             }
         }
-        emit(Signal.Upstream.Next(value))
-        emit(Signal.Upstream.Complete)
     }
 
 /** Collects all items into an immutable [List]. */
@@ -151,11 +155,11 @@ fun <T : Any> Many<T>.toList(): One<List<T>> =
         val fused = collectInto(mutableListOf<T>()) { acc, item -> acc.also { it.add(item) } }
         val outcome = fused ?: run {
             val result = mutableListOf<T>()
-            collect { value -> result.add(value); Signal.Downstream.Request }.mapLeft { result }
+            collect { value -> result.add(value); Signal.Downstream.Request }.mapRight { result }
         }
         when (outcome) {
-            is Either.Left  -> { emit(Signal.Upstream.Next(outcome.value as List<T>)); emit(Signal.Upstream.Complete) }
-            is Either.Right -> emit(Signal.Upstream.Error(outcome.value))
+            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value as List<T>)); emit(Signal.Upstream.Complete) }
+            is Either.Left -> emit(Signal.Upstream.Error(outcome.value))
         }
     }
 
@@ -165,21 +169,21 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
         val fused = collectInto(mutableSetOf<T>()) { acc, item -> acc.also { it.add(item) } }
         val outcome = fused ?: run {
             val result = mutableSetOf<T>()
-            collect { value -> result.add(value); Signal.Downstream.Request }.mapLeft { result }
+            collect { value -> result.add(value); Signal.Downstream.Request }.mapRight { result }
         }
         when (outcome) {
-            is Either.Left  -> { emit(Signal.Upstream.Next(outcome.value as Set<T>)); emit(Signal.Upstream.Complete) }
-            is Either.Right -> emit(Signal.Upstream.Error(outcome.value))
+            is Either.Right  -> { emit(Signal.Upstream.Next(outcome.value as Set<T>)); emit(Signal.Upstream.Complete) }
+            is Either.Left -> emit(Signal.Upstream.Error(outcome.value))
         }
     }
 
 /**
- * Suspends until the first item is emitted, then cancels the subscription.
+ * Suspends until the first item is emitted then cancels the subscription.
  *
- * Returns [Either.Left] with the first item, or [Either.Right] with a [NoSuchElementException]
+ * Returns [Either.Right] with the first item, or [Either.Left] with [NoSuchElementException]
  * if the stream was empty, or with the upstream error if the stream errored.
  */
-suspend fun <T : Any> Many<T>.first(): Either<T, AelvException> {
+suspend fun <T : Any> Many<T>.first(): Either<Exception, T> {
     var result: Any = Unset
     val outcome = collect { value ->
         result = value
@@ -188,20 +192,20 @@ suspend fun <T : Any> Many<T>.first(): Either<T, AelvException> {
     return when {
         result !== Unset        -> {
             @Suppress("UNCHECKED_CAST")
-            (result as T).left()
+            (result as T).right()
         }
-        outcome is Either.Right -> outcome
-        else                    -> NoSuchElementException().right()
+        outcome is Either.Left -> outcome
+        else                    -> NoSuchElementException().left()
     }
 }
 
 /**
- * Suspends until the stream completes, then returns the last emitted item.
+ * Suspends until the stream completes then returns the last emitted item.
  *
- * Returns [Either.Left] with the last item, or [Either.Right] with a [NoSuchElementException]
+ * Returns [Either.Right] with the last item, or [Either.Left] with [NoSuchElementException]
  * if the stream was empty, or with the upstream error if the stream errored.
  */
-suspend fun <T : Any> Many<T>.last(): Either<T, AelvException> {
+suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
     var result: Any = Unset
     val outcome = collect { value ->
         result = value
@@ -210,9 +214,9 @@ suspend fun <T : Any> Many<T>.last(): Either<T, AelvException> {
     return when {
         result !== Unset        -> {
             @Suppress("UNCHECKED_CAST")
-            (result as T).left()
+            (result as T).right()
         }
-        outcome is Either.Right -> outcome
-        else                    -> NoSuchElementException().right()
+        outcome is Either.Left -> outcome
+        else                    -> NoSuchElementException().left()
     }
 }

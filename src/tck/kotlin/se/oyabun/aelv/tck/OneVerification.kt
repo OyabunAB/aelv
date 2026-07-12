@@ -21,14 +21,13 @@ import org.reactivestreams.tck.TestEnvironment
 import org.testng.SkipException
 import org.testng.annotations.Test
 import se.oyabun.aelv.One
-import se.oyabun.aelv.UpstreamErrorException
 
 @Test
 class OneVerification : PublisherVerification<Int>(TestEnvironment()) {
 
     override fun createPublisher(elements: Long): Publisher<Int> = when (elements) {
-        0L -> One.error(UpstreamErrorException(RuntimeException("empty")))
-        1L -> One.of(1)
+        0L -> One.error(RuntimeException("empty"))
+        1L -> One.single(1)
         else -> throw SkipException("One<T> emits exactly 1 element, cannot produce $elements")
     }
 
@@ -37,6 +36,6 @@ class OneVerification : PublisherVerification<Int>(TestEnvironment()) {
             override fun request(n: Long) {}
             override fun cancel() {}
         })
-        subscriber.onError(UpstreamErrorException(RuntimeException("tck failed publisher")))
+        subscriber.onError(RuntimeException("tck failed publisher"))
     }
 }

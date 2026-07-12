@@ -31,13 +31,14 @@ import org.openjdk.jmh.annotations.Warmup
 import se.oyabun.aelv.Many
 import se.oyabun.aelv.One
 import se.oyabun.aelv.Sinks
+import se.oyabun.aelv.await
 import se.oyabun.aelv.concatMap
 import se.oyabun.aelv.filter
 import se.oyabun.aelv.flatMap
 import se.oyabun.aelv.flatMapMany
 import se.oyabun.aelv.fold
-import se.oyabun.aelv.get
 import se.oyabun.aelv.map
+import se.oyabun.aelv.rightOrThrow
 import se.oyabun.aelv.take
 import se.oyabun.aelv.toList
 
@@ -53,23 +54,23 @@ open class AelvBenchmark {
 
     private val scope = CoroutineScope(SupervisorJob())
 
-    private fun <T> run(block: suspend () -> T): T = runBlocking { block() }
+    private fun <T> run(closure: suspend () -> T): T = runBlocking { closure() }
 
     @Benchmark
     fun many_baseline_toList(): Int =
-        run { Many.range(0, size).toList().get() }.leftOrThrow().size
+        run { Many.range(0, size).toList().await() }.rightOrThrow().size
 
     @Benchmark
     fun many_map_toList(): Int =
-        run { Many.range(0, size).map { it * 2 }.toList().get() }.leftOrThrow().size
+        run { Many.range(0, size).map { it * 2 }.toList().await() }.rightOrThrow().size
 
     @Benchmark
     fun many_filter_toList(): Int =
-        run { Many.range(0, size).filter { it % 2 == 0 }.toList().get() }.leftOrThrow().size
+        run { Many.range(0, size).filter { it % 2 == 0 }.toList().await() }.rightOrThrow().size
 
     @Benchmark
     fun many_take_toList(): Int =
-        run { Many.range(0, size).take(size.toLong() / 2).toList().get() }.leftOrThrow().size
+        run { Many.range(0, size).take(size.toLong() / 2).toList().await() }.rightOrThrow().size
 
     @Benchmark
     fun many_chain_map_filter_take(): Int =
@@ -78,62 +79,62 @@ open class AelvBenchmark {
                 .map { it * 2 }
                 .filter { it % 4 == 0 }
                 .take(size.toLong() / 4)
-                .toList().get()
-        }.leftOrThrow().size
+                .toList().await()
+        }.rightOrThrow().size
 
     @Benchmark
     fun many_concatMap_toList(): Int =
         run {
             Many.range(0, size / 10)
-                .concatMap { i -> Many.just(i, i + 1, i + 2) }
-                .toList().get()
-        }.leftOrThrow().size
+                .concatMap { i -> Many.items(i, i + 1, i + 2) }
+                .toList().await()
+        }.rightOrThrow().size
 
     @Benchmark
     fun many_flatMap_sequential_toList(): Int =
         run {
             Many.range(0, size / 10)
-                .flatMap(concurrency = 1) { i -> Many.just(i, i + 1, i + 2) }
-                .toList().get()
-        }.leftOrThrow().size
+                .flatMap(concurrency = 1) { i -> Many.items(i, i + 1, i + 2) }
+                .toList().await()
+        }.rightOrThrow().size
 
     @Benchmark
     fun many_flatMap_concurrent_toList(): Int =
         run {
             Many.range(0, size / 10)
-                .flatMap(concurrency = 256) { i -> Many.just(i, i + 1, i + 2) }
-                .toList().get()
-        }.leftOrThrow().size
+                .flatMap(concurrency = 256) { i -> Many.items(i, i + 1, i + 2) }
+                .toList().await()
+        }.rightOrThrow().size
 
     @Benchmark
     fun many_fold_sum(): Long =
         run {
             Many.range(0, size)
                 .fold(0L) { acc, i -> acc + i }
-                .get()
-        }.leftOrThrow()
+                .await()
+        }.rightOrThrow()
 
     @Benchmark
     fun one_baseline_get(): Int =
-        run { One.of(42).get() }.leftOrThrow()
+        run { One.single(42).await() }.rightOrThrow()
 
     @Benchmark
     fun one_map_get(): Int =
-        run { One.of(42).map { it * 2 }.get() }.leftOrThrow()
+        run { One.single(42).map { it * 2 }.await() }.rightOrThrow()
 
     @Benchmark
     fun one_flatMapMany_toList(): Int =
         run {
-            One.of(size)
+            One.single(size)
                 .flatMapMany { n -> Many.range(0, n) }
-                .toList().get()
-        }.leftOrThrow().size
+                .toList().await()
+        }.rightOrThrow().size
 
     @Benchmark
     fun sink_broadcast_single_subscriber(): Int {
         val sink = Sinks.broadcast<Int>()
         return run {
-            val job = scope.launch { sink.asMany().toList().get() }
+            val job = scope.launch { sink.asMany().toList().await() }
             repeat(size) { sink.emit(it) }
             sink.complete()
             job.join()
@@ -145,7 +146,7 @@ open class AelvBenchmark {
     fun sink_broadcast_four_subscribers(): Int {
         val sink = Sinks.broadcast<Int>()
         return run {
-            val jobs = List(4) { scope.launch { sink.asMany().toList().get() } }
+            val jobs = List(4) { scope.launch { sink.asMany().toList().await() } }
             repeat(size) { sink.emit(it) }
             sink.complete()
             jobs.forEach { it.join() }
