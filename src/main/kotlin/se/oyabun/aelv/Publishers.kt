@@ -42,7 +42,7 @@ internal sealed interface Fusion<out T : Any> {
     data object None : Fusion<Nothing>
     abstract class Available<T : Any> : Fusion<T> {
         abstract fun create(context: CoroutineContext = EmptyCoroutineContext): Available<T>?
-        abstract fun poll(): Either<Unset, T>
+        abstract fun poll(): T?
         open fun connectSource(upstream: Available<*>): Fusion<T> = None
     }
 }
@@ -103,10 +103,8 @@ class Many<T : Any> private constructor(
             val poll = currentFusion.create(coroutineContext)
             if (poll != null) return Either.catching {
                 while (true) {
-                    when (val polled = poll.poll()) {
-                        is Failure  -> break
-                        is Success -> if (action(polled.value) == Signal.Downstream.Cancel) break
-                    }
+                    val value = poll.poll() ?: break
+                    if (action(value) == Signal.Downstream.Cancel) break
                 }
             }
         }
@@ -123,10 +121,8 @@ class Many<T : Any> private constructor(
         return Either.catchingStrict {
             var accumulator = initial
             while (true) {
-                when (val polled = poll.poll()) {
-                    is Failure  -> break
-                    is Success -> accumulator = accumulate(accumulator, polled.value)
-                }
+                val value = poll.poll() ?: break
+                accumulator = accumulate(accumulator, value)
             }
             accumulator
         }
@@ -388,19 +384,19 @@ private class RangeFusion(private val start: Int, private val count: Int) : Fusi
     private val end: Long = start.toLong() + count
     private var current: Long = start.toLong()
     override fun create(context: CoroutineContext): Fusion.Available<Int> = RangeFusion(start, count)
-    override fun poll(): Either<Unset, Int> = if (current < end) current++.toInt().right() else Unset.left()
+    override fun poll(): Int? = if (current < end) current++.toInt() else null
 }
 
 private class ArrayFusion<T : Any>(private val items: Array<out T>) : Fusion.Available<T>() {
     private var index = 0
     override fun create(context: CoroutineContext): Fusion.Available<T> = ArrayFusion(items)
-    override fun poll(): Either<Unset, T> = if (index < items.size) items[index++].right() else Unset.left()
+    override fun poll(): T? = if (index < items.size) items[index++] else null
 }
 
 private class IterableFusion<T : Any>(private val iterable: Iterable<T>) : Fusion.Available<T>() {
     private var iterator: Iterator<T> = iterable.iterator()
     override fun create(context: CoroutineContext): Fusion.Available<T> = IterableFusion(iterable)
-    override fun poll(): Either<Unset, T> = if (iterator.hasNext()) iterator.next().right() else Unset.left()
+    override fun poll(): T? = if (iterator.hasNext()) iterator.next() else null
 }
 
 internal class MapFusion<T : Any, R : Any>(
@@ -409,10 +405,7 @@ internal class MapFusion<T : Any, R : Any>(
 ) : Fusion.Available<R>() {
     override fun create(context: CoroutineContext): Fusion.Available<R>? =
         upstream.create(context)?.let { MapFusion(it, transform) }
-    override fun poll(): Either<Unset, R> = when (val polled = upstream.poll()) {
-        is Failure  -> polled
-        is Success -> transform(polled.value).right()
-    }
+    override fun poll(): R? = upstream.poll()?.let(transform)
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<R> {
         val connected = this.upstream.connectSource(upstream)
         return if (connected is Fusion.Available) MapFusion(connected, transform) else Fusion.None
@@ -425,12 +418,10 @@ internal class FilterFusion<T : Any>(
 ) : Fusion.Available<T>() {
     override fun create(context: CoroutineContext): Fusion.Available<T>? =
         upstream.create(context)?.let { FilterFusion(it, predicate) }
-    override fun poll(): Either<Unset, T> {
+    override fun poll(): T? {
         while (true) {
-            when (val polled = upstream.poll()) {
-                is Failure  -> return polled
-                is Success -> if (predicate(polled.value)) return polled
-            }
+            val value = upstream.poll() ?: return null
+            if (predicate(value)) return value
         }
     }
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<T> {
@@ -446,12 +437,11 @@ internal class TakeFusion<T : Any>(
     private var remaining = limit
     override fun create(context: CoroutineContext): Fusion.Available<T>? =
         upstream.create(context)?.let { TakeFusion(it, limit) }
-    override fun poll(): Either<Unset, T> {
-        if (remaining == 0L) return Unset.left()
-        return when (val polled = upstream.poll()) {
-            is Failure  -> polled
-            is Success -> { remaining--; polled }
-        }
+    override fun poll(): T? {
+        if (remaining == 0L) return null
+        val value = upstream.poll() ?: return null
+        remaining--
+        return value
     }
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<T> {
         val connected = this.upstream.connectSource(upstream)
@@ -461,7 +451,7 @@ internal class TakeFusion<T : Any>(
 
 internal class SourceFusion<T : Any> : Fusion.Available<T>() {
     override fun create(context: CoroutineContext): Fusion.Available<T>? = null
-    override fun poll(): Either<Unset, T> = error("SourceFusion.poll() called on unresolved pipeline")
+    override fun poll(): T? = error("SourceFusion.poll() called on unresolved pipeline")
     @Suppress("UNCHECKED_CAST")
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<T> = upstream as Fusion<T>
 }

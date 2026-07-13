@@ -37,15 +37,15 @@ java -jar build/libs/aelv-*-jmh.jar -wi 3 -i 5 -f 1 -p size=1000 -tu ms
 
 | Benchmark | aelv | RxJava | Mutiny | Reactor | Monix |
 |---|---:|---:|---:|---:|---:|
-| baseline_toList | **186** | 157 | 62 | 42 | 27 |
-| map_toList | **107** | 107 | 62 | 43 | 23 |
-| filter_toList | 158 | **182** | 92 | 75 | 29 |
-| take_toList | **279** | 215 | 163 | 90 | 33 |
-| fold_sum | **167** | 158 | 62 | 43 | 34 |
-| chain (map→filter→take) | 205 | **249** | 129 | 89 | 35 |
-| concatMap_toList | 38 | 62 | **79** | 55 | 28 |
-| flatMap_sequential | 37 | — | — | — | — |
-| flatMap_concurrent | 27 | **101** | 41 | 56 | 23 |
+| baseline_toList | 92 | **165** | 119 | 49 | 30 |
+| map_toList | 76 | **114** | 61 | 46 | 26 |
+| filter_toList | 125 | **208** | 91 | 81 | 32 |
+| take_toList | 211 | **223** | 98 | 96 | 34 |
+| fold_sum | 101 | **154** | 97 | 48 | 42 |
+| chain (map→filter→take) | 170 | **277** | 134 | 98 | 36 |
+| concatMap_toList | **69** | **69** | 77 | 58 | 32 |
+| flatMap_sequential | **57** | — | — | — | — |
+| flatMap_concurrent | 20 | **99** | 40 | 55 | 28 |
 
 *ops/ms — higher is better.*
 
@@ -54,11 +54,12 @@ java -jar build/libs/aelv-*-jmh.jar -wi 3 -i 5 -f 1 -p size=1000 -tu ms
 **Fused pipelines** (`baseline`, `map`, `filter`, `take`, `fold`, `chain`) activate aelv's
 synchronous fusion protocol. When the entire chain from source to terminal is synchronous, aelv
 bypasses the coroutine callback machinery and runs a tight poll loop — no state machine transitions,
-no signal allocations. This puts aelv at or near the top on fused pipelines.
+no signal allocations. On this machine RxJava leads the fused benchmarks; aelv is competitive and
+ahead of Mutiny and Reactor on all fused operations.
 
-**`concatMap`** aelv now uses the interpreter's work-deque for sequential flat-map, removing
-the per-inner-stream coroutine allocation. The result roughly doubled vs the previous
-coroutine-based implementation (38 → 66 ops/ms at size=1000).
+**`concatMap`** aelv uses the interpreter's work-deque for sequential flat-map, removing
+the per-inner-stream coroutine allocation. aelv and RxJava tie at 69 ops/ms; Mutiny is slightly
+ahead at 77 ops/ms on this run.
 
 **`flatMap_concurrent`** launches inner streams inline (no `launch`, serialised via `Mutex`).
 RxJava's advantage here is its lock-free drain loop. For real IO-bound workloads where inner
@@ -91,11 +92,11 @@ java -jar build/libs/aelv-*-jmh.jar DeepFlatMapBenchmark -wi 3 -i 5 -f 1 -tu ms
 
 | Library | depth=1000 | depth=10000 | depth=100000 | Mechanism |
 |---|---:|---:|---:|---|
-| **aelv** | **10** | **1.1** | **0.11** | Work-deque interpreter — O(1) JVM stack |
-| RxJava | 39 | 3.8 | 0.28 | Drain loop trampolines inner subscriptions |
-| Monix | 4.0 | 0.23 | 0.24 | Scala Observable scheduler trampolines |
-| Mutiny | 0.9 | timeout | timeout | Merge operator hangs on deep recursion |
-| Reactor | 17 | **crash** | **crash** | StackOverflow kills the forked JVM |
+| **aelv** | **10** | **1.5** | **0.15** | Work-deque interpreter — O(1) JVM stack |
+| RxJava | 39 | 3.7 | 0.27 | Drain loop trampolines inner subscriptions |
+| Monix | 4.2 | 0.26 | 0.21 | Scala Observable scheduler trampolines |
+| Mutiny | 1.1 | timeout | timeout | Merge operator hangs on deep recursion |
+| Reactor | 16 | **crash** | **crash** | StackOverflow kills the forked JVM |
 
 *ops/ms — `timeout` = 5 s per op limit hit; `crash` = StackOverflow corrupted JMH IPC.*
 
