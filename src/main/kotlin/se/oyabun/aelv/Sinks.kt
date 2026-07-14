@@ -17,7 +17,9 @@ package se.oyabun.aelv
 
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -171,4 +173,61 @@ object Sinks {
 
     fun <T : Any> replayLast(n: Int, bufferSize: Int = DEFAULT_BUFFER): ReplayLastSink<T> =
         ReplayLastSink(n, bufferSize)
+
+    fun <T : Any> unicast(): UnicastSink<T> = UnicastSink()
+}
+
+/**
+ * A unicast push source — each emitted item is delivered to exactly one subscriber.
+ *
+ * Multiple subscribers compete for items via [asMany]; each item goes to exactly one.
+ * [asOne] takes the next available item as a [One].
+ *
+ * Uses a [ConcurrentLinkedQueue] and a conflated [Channel] as wakeup signal.
+ */
+class UnicastSink<T : Any> {
+
+    private val queue    = ConcurrentLinkedQueue<T>()
+    private val signal   = Channel<Unit>(Channel.CONFLATED)
+    private val terminal = AtomicReference<Signal.Upstream<T>>(null)
+
+    fun emit(value: T) {
+        if (terminal.get() != null) return
+        queue.add(value)
+        signal.trySend(Unit)
+    }
+
+    fun complete() {
+        terminal.compareAndSet(null, Signal.Upstream.Complete)
+        signal.trySend(Unit)
+    }
+
+    fun error(cause: Exception) {
+        terminal.compareAndSet(null, Signal.Upstream.Error(cause))
+        signal.trySend(Unit)
+    }
+
+    fun asMany(): Many<T> = Many.generate { downstream ->
+        while (true) {
+            var item = queue.poll()
+            while (item != null) {
+                if (downstream(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
+                item = queue.poll()
+            }
+            when (val term = terminal.get()) {
+                null                        -> signal.receive()
+                is Signal.Upstream.Complete -> return@generate
+                is Signal.Upstream.Error    -> { downstream(term); return@generate }
+                else                        -> return@generate
+            }
+        }
+    }
+
+    fun asOne(): One<T> = One.generate { downstream ->
+        asMany().take(1).source(
+            { value -> downstream(Signal.Upstream.Next(value)) },
+            { downstream(Signal.Upstream.Complete) },
+            { cause -> downstream(Signal.Upstream.Error(cause)) },
+        )
+    }
 }

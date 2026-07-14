@@ -57,17 +57,23 @@ class Verify<T : Any> private constructor(
 
     private val steps = mutableListOf<Step<T>>()
 
-    fun isSubscribed(): Verify<T>                       = apply { steps.add(Step.IsSubscribed()) }
-    fun emitsNext(vararg values: T): Verify<T>          = apply { steps.add(Step.EmitsNext(values.toList())) }
-    fun emitsCount(count: Long): Verify<T>              = apply { steps.add(Step.EmitsCount(count)) }
-    fun matchesNext(assertion: (T) -> Unit): Verify<T>  = apply { steps.add(Step.MatchesNext(assertion)) }
-    fun runs(action: () -> Unit): Verify<T>             = apply { steps.add(Step.Runs(action)) }
-    fun thenCancels(): Verify<T>                        = apply { steps.add(Step.ThenCancels()) }
+    fun isSubscribed(): Verify<T>                        = apply { steps.add(Step.IsSubscribed()) }
+    fun emitsNext(vararg values: T): Verify<T>           = apply { steps.add(Step.EmitsNext(values.toList())) }
+    fun emitsCount(count: Long): Verify<T>               = apply { steps.add(Step.EmitsCount(count)) }
+    fun assertNext(assertion: (T) -> Unit): Verify<T>    = apply { steps.add(Step.MatchesNext(assertion)) }
+    fun matchesNext(assertion: (T) -> Unit): Verify<T>   = assertNext(assertion)
+    fun runs(action: () -> Unit): Verify<T>              = apply { steps.add(Step.Runs(action)) }
+    fun thenCancels(): Verify<T>                         = apply { steps.add(Step.ThenCancels()) }
 
-    fun verify()            = execute(expectComplete = false)
-    fun completesNormally() = execute(expectComplete = true)
+    fun verify(within: Duration = timeout)            = runBlocking { executeS(expectComplete = false, within) }
+    fun completesNormally(within: Duration = timeout) = runBlocking { executeS(expectComplete = true,  within) }
 
-    fun completesWithError(): Throwable = runBlocking {
+    suspend fun verifyS(within: Duration = timeout)            = executeS(expectComplete = false, within)
+    suspend fun completesNormallyS(within: Duration = timeout) = executeS(expectComplete = true,  within)
+
+    fun completesWithError(within: Duration = timeout): Throwable = runBlocking { completesWithErrorS(within) }
+
+    suspend fun completesWithErrorS(within: Duration = timeout): Throwable {
         val items = Channel<T>(Channel.UNLIMITED)
         var terminalCause: Throwable = IllegalStateException("no error received")
         var hasError = false
@@ -79,12 +85,12 @@ class Verify<T : Any> private constructor(
             override fun onComplete()                 { runCatching { items.close() } }
         })
 
-        withTimeout(timeout) { for (ignored in items) { } }
+        withTimeout(within) { for (ignored in items) { } }
         if (!hasError) error("expected error but stream completed normally")
-        terminalCause
+        return terminalCause
     }
 
-    private fun execute(expectComplete: Boolean) = runBlocking {
+    private suspend fun executeS(expectComplete: Boolean, within: Duration) {
         val items      = Channel<T>(Channel.UNLIMITED)
         var terminal: Terminal = Complete
         var terminalSet = false
@@ -102,7 +108,7 @@ class Verify<T : Any> private constructor(
             override fun onComplete()          { if (!terminalSet) { terminal = Complete; terminalSet = true }; runCatching { items.close() } }
         })
 
-        withTimeout(timeout) { subscribed.receive() }
+        withTimeout(within) { subscribed.receive() }
 
         for (step in steps) {
             when (step) {
@@ -116,21 +122,21 @@ class Verify<T : Any> private constructor(
                     terminal = Cancel; break
                 }
                 is Step.EmitsNext     -> for (expected in step.values) {
-                    val actual = withTimeout(timeout) { items.receive() }
+                    val actual = withTimeout(within) { items.receive() }
                     check(actual == expected) { "expected $expected but got $actual" }
                 }
                 is Step.EmitsCount    -> repeat(step.count.toInt()) {
-                    withTimeout(timeout) { items.receive() }
+                    withTimeout(within) { items.receive() }
                 }
                 is Step.MatchesNext  -> {
-                    val actual = withTimeout(timeout) { items.receive() }
+                    val actual = withTimeout(within) { items.receive() }
                     step.assertion(actual)
                 }
             }
         }
 
         if (expectComplete) {
-            withTimeout(timeout) { while (!terminalSet && terminal == Complete) delay(1) }
+            withTimeout(within) { while (!terminalSet && terminal == Complete) delay(1) }
             when (terminal) {
                 is Errored -> throw AssertionError("expected complete but got error: ${(terminal as Errored).cause}", (terminal as Errored).cause)
                 Complete   -> Unit

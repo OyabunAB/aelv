@@ -98,6 +98,9 @@ fun <A : Throwable, B> Either<A, B>.rightOrThrow(): B = when (this) {
     is Failure  -> throw value
 }
 
+/** Alias for [rightOrThrow] — matches Kotlin's [Result.getOrThrow] convention. */
+fun <A : Throwable, B> Either<A, B>.getOrThrow(): B = rightOrThrow()
+
 /**
  * Base class for all exceptions thrown or signalled by aelv.
  *
