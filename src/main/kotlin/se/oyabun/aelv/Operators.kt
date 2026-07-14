@@ -248,7 +248,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
     }
 }
 
-/** Maps each element to a [One] and flattens, subscribing concurrently up to [concurrency] at a time. */
+/** Maps each element to a [Many] and flattens sequentially, subscribing to one inner stream at a time. */
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     Many.fromStep(Step.ConcatMap(step, transform))
 
@@ -827,9 +827,9 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
 }
 
 /**
- * Drops upstream items that arrive when the downstream has no pending demand.
+ * Drops upstream items that arrive when the internal buffer is full.
  *
- * Use this only when data loss is acceptable — issue.g. high-frequency sensor readings where
+ * Use this only when data loss is acceptable — e.g. high-frequency sensor readings where
  * only the latest values matter.
  */
 fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
@@ -1008,7 +1008,12 @@ fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
         }
     }
 
-/** Re-subscribes to the source on error, up to [times] times.  Defaults to unbounded retries. */
+/**
+ * Re-subscribes to the source on error, up to [times] times.  Defaults to unbounded retries.
+ *
+ * The source is re-subscribed from scratch on each retry — stateful sources reset.
+ * There is no "resume from where it left off" semantics.
+ */
 fun <T : Any> Many<T>.retry(times: Long = Long.MAX_VALUE): Many<T> =
     retry(Policy.retry().maxAttempts(times))
 

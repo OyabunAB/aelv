@@ -63,8 +63,13 @@ class Verify<T : Any> private constructor(
     fun assertNext(assertion: (T) -> Unit): Verify<T>    = apply { steps.add(Step.MatchesNext(assertion)) }
     fun matchesNext(assertion: (T) -> Unit): Verify<T>   = assertNext(assertion)
     fun runs(action: () -> Unit): Verify<T>              = apply { steps.add(Step.Runs(action)) }
+    /** Steps added after [thenCancels] are silently ignored — [thenCancels] breaks the step loop immediately. */
     fun thenCancels(): Verify<T>                         = apply { steps.add(Step.ThenCancels()) }
 
+    /**
+     * Executes the step list within [within] but does NOT assert that the stream completes.
+     * Use [completesNormally] to additionally assert completion.
+     */
     fun verify(within: Duration = timeout)            = runBlocking { execute(expectComplete = false, within) }
     fun completesNormally(within: Duration = timeout) = runBlocking { execute(expectComplete = true,  within) }
     fun completesWithError(within: Duration = timeout): Throwable = runBlocking { completesWithErrorInternal(within) }

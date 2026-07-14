@@ -162,6 +162,7 @@ class Many<T : Any> private constructor(
                 factory().source(onNext, onComplete, onError)
             }
 
+        /** Creates a placeholder source that throws [IllegalStateException] at subscription time if not connected via `applyTo()` or `then()`. */
         fun <T : Any> pipelineFrom(): Many<T> = Many(Step.PipelineSource(), SourceFusion())
 
         fun interval(period: Duration): Many<Long> = fused { onNext, onComplete, _ ->
@@ -253,6 +254,12 @@ class Many<T : Any> private constructor(
 }
 
 
+/**
+ * A cold publisher of exactly one item of type [T].
+ *
+ * If the source emits zero items the subscriber receives only `onComplete` without `onNext` — no error.
+ * If it emits more than one item, all items after the first are silently consumed.
+ */
 class One<T : Any> private constructor(
     internal val source: suspend (
         onNext: suspend (T) -> Signal.Downstream,
@@ -323,6 +330,7 @@ class One<T : Any> private constructor(
 
         fun <T : Any> never(): One<T> = One { _, _, _ -> awaitCancellation() }
 
+        /** Creates a placeholder source that throws [IllegalStateException] at subscription time if not connected via `applyTo()` or `then()`. */
         fun <T : Any> pipelineFrom(): One<T> = One { onNext, onComplete, onError ->
             @Suppress("UNCHECKED_CAST")
             val source = currentCoroutineContext()[SourceSlot]?.publisher as? One<T>
@@ -330,6 +338,13 @@ class One<T : Any> private constructor(
             source.source(onNext, onComplete, onError)
         }
 
+        /**
+         * Bridges a callback-based async operation into a [One].
+         *
+         * The [block] receives `success` and `failure` callbacks — exactly one must be called.
+         * Calling neither causes the subscriber to hang indefinitely.
+         * Calling both is undefined behaviour.
+         */
         fun <T : Any> create(block: (success: (T) -> Unit, failure: (Exception) -> Unit) -> Unit): One<T> =
             One.generate { emit ->
                 val result = suspendCancellableCoroutine<Either<Exception, T>> { continuation ->
@@ -460,6 +475,12 @@ class Maybe<T : Any> internal constructor(
     }
 }
 
+/**
+ * A cold publisher of no items of type [T].
+ *
+ * The type parameter [T] exists only for type-system compatibility and carries no values.
+ * Use `None<Unit>` when the type is irrelevant.
+ */
 class None<T : Any> private constructor(
     private val source: suspend () -> Unit,
 ) : Publisher<Nothing> {

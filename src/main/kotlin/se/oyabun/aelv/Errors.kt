@@ -40,7 +40,7 @@ sealed class Either<out A, out B> {
     /** Returns the [Right] value, or null if this is a [Left]. */
     fun rightOrNull(): B? = if (this is Right) value else null
 
-    /** Returns the [Left] value, or throws the [Right] value if it is a [Throwable], otherwise throws [IllegalStateException]. */
+    /** Returns the [Left] value. If this is a [Right], throws the right value when it is a [Throwable]; otherwise wraps it in [IllegalStateException]. */
     fun leftOrThrow(): A = when (this) {
         is Left  -> value
         is Right -> throw if (value is Throwable) value else IllegalStateException("Either.Left: $value")

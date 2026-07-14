@@ -2,6 +2,12 @@
 
 Minimalistic reactive streams for Kotlin. Implements the [Reactive Streams](https://www.reactive-streams.org/) specification on top of Kotlin coroutines.
 
+## Requirements
+
+- Kotlin 2.x
+- JVM 21+
+- GitHub Packages credentials (`GITHUB_ACTOR` / `GITHUB_TOKEN`)
+
 ## Install
 
 ```kotlin
@@ -230,3 +236,9 @@ tight poll loop.
 
 Backpressure is unconditional — fusion only activates on the internal synchronous terminal path.
 Any async operator routes through the full protocol with demand signalling and cancellation.
+
+## Status
+
+Current release: `1.0.0-rc.4`
+
+All operators across `Many`, `One`, `Maybe`, and `None` are implemented and tested. `Maybe<T>` was introduced in rc.4. No breaking changes are planned before `1.0.0`.

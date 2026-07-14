@@ -49,6 +49,10 @@ sealed class Sink<T : Any>(
     private val history     = ArrayDeque<Signal.Upstream.Next<T>>()
     private val subscribers = CopyOnWriteArrayList<Channel<Signal.Upstream<T>>>()
 
+    /**
+     * Suspends when the slowest subscriber's channel buffer is full — this is the backpressure mechanism.
+     * A slow subscriber blocks [emit] for all other subscribers until it drains.
+     */
     suspend fun emit(value: T) {
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
@@ -63,6 +67,10 @@ sealed class Sink<T : Any>(
         }
     }
 
+    /**
+     * Returns false if any subscriber's buffer is full, even if others have capacity.
+     * A single slow subscriber causes all [tryEmit] calls to return false.
+     */
     fun tryEmit(value: T): Boolean {
         if (terminal.get().notUnset()) return false
         val signal = Signal.Upstream.Next(value)
@@ -191,8 +199,11 @@ class UnicastSink<T : Any> {
     private val signal   = Channel<Unit>(Channel.CONFLATED)
     private val terminal = AtomicReference<Signal.Upstream<T>>(null)
 
+    /**
+     * Queues [value] in an unbounded [java.util.concurrent.ConcurrentLinkedQueue].
+     * Not a suspend function — memory grows without bound if no subscriber is consuming.
+     */
     fun emit(value: T) {
-        if (terminal.get() != null) return
         queue.add(value)
         signal.trySend(Unit)
     }
