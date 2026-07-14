@@ -120,10 +120,9 @@ class BackpressureTest {
         val maxObserved = AtomicInteger(0)
 
         withContext(Dispatchers.Default) {
-            Many.items(1, 2, 3, 4, 5, 6, 7, 8)
-                .flatMap(concurrency = 4) { item ->
+            val stream: Many<Int> = Many.items(1, 2, 3, 4, 5, 6, 7, 8)
+                .flatMap<Int, Int>(concurrency = 4) { item: Int ->
                     Many.generate { emit ->
-                        // Yield to let the scheduler interleave all 4 active coroutines.
                         kotlinx.coroutines.yield()
                         emit(Signal.Upstream.Next(item))
                         emit(Signal.Upstream.Complete)
@@ -132,11 +131,10 @@ class BackpressureTest {
                 .doOnNext {
                     val n = inFlight.incrementAndGet()
                     maxObserved.updateAndGet { prev -> if (n > prev) n else prev }
-                    Thread.sleep(2) // hold briefly to make overlap observable
+                    Thread.sleep(2)
                     inFlight.decrementAndGet()
                 }
-                .toList()
-                .await()
+            stream.toList().await()
         }
 
         assertEquals(

@@ -349,6 +349,117 @@ class One<T : Any> private constructor(
     }
 }
 
+/**
+ * A cold publisher of zero or one items of type [T].
+ *
+ * The contract: [source] calls [onNext] at most once, then calls [onComplete].
+ * If no value is available it calls [onComplete] directly without calling [onNext].
+ * On error it calls [onError] instead of [onComplete].
+ *
+ * Use [Maybe.present] to create a present value, [Maybe.empty] for the absent case,
+ * and [Maybe.defer] to build one lazily from a suspend block that returns `T?` —
+ * a null return means absent.
+ */
+class Maybe<T : Any> internal constructor(
+    internal val source: suspend (
+        onNext:     suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError:    suspend (Exception) -> Unit,
+    ) -> Unit,
+) : Publisher<T> {
+
+    override fun subscribe(subscriber: Subscriber<in T>) {
+        val subscription = StreamSubscription(subscriber, source)
+        subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
+    }
+
+    internal suspend fun collect(
+        action: suspend (T) -> Signal.Downstream,
+    ): Either<Exception, Unit> = Either.catching {
+        source(
+            { value -> action(value) },
+            { },
+            ::rethrow,
+        )
+    }
+
+    companion object {
+
+        fun <T : Any> present(value: T): Maybe<T> = Maybe { onNext, onComplete, _ ->
+            if (onNext(value) != Signal.Downstream.Cancel) onComplete()
+        }
+
+        fun <T : Any> empty(): Maybe<T> = Maybe { _, onComplete, _ ->
+            onComplete()
+        }
+
+        fun <T : Any> error(cause: Exception): Maybe<T> = Maybe { _, _, onError ->
+            onError(cause)
+        }
+
+        fun <T : Any> never(): Maybe<T> = Maybe { _, _, _ ->
+            awaitCancellation()
+        }
+
+        /**
+         * Builds a [Maybe] from a suspend block.
+         *
+         * A non-null return value produces a present [Maybe]; a null return means absent.
+         * Exceptions propagate as stream errors.
+         */
+        fun <T : Any> defer(closure: suspend () -> T?): Maybe<T> = Maybe { onNext, onComplete, onError ->
+            try {
+                val value = closure()
+                if (value != null) {
+                    if (onNext(value) != Signal.Downstream.Cancel) onComplete()
+                } else {
+                    onComplete()
+                }
+            } catch (exception: Exception) {
+                onError(exception)
+            }
+        }
+
+        /**
+         * Adapts any [Publisher] into a [Maybe] by taking at most its first emitted item.
+         *
+         * If the publisher emits at least one item, that first item is forwarded and the
+         * subscription is immediately cancelled — subsequent items are discarded.  If the publisher
+         * completes without emitting, the [Maybe] is empty.  Errors are forwarded as [Maybe] errors.
+         *
+         * This is the bridge used by [Many.firstMaybe] and [One.toMaybe].
+         */
+        fun <T : Any> from(publisher: Publisher<T>): Maybe<T> = Maybe { onNext, onComplete, onError ->
+            var emitted = false
+            try {
+                publisher.asFlow().collectCancelling { value ->
+                    if (!emitted) {
+                        emitted = true
+                        onNext(value) == Signal.Downstream.Cancel
+                    } else {
+                        true
+                    }
+                }
+                onComplete()
+            } catch (exception: Exception) {
+                onError(exception)
+            }
+        }
+
+        internal fun <T : Any> generate(
+            block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
+        ): Maybe<T> = Maybe { onNext, onComplete, onError ->
+            block { signal ->
+                when (signal) {
+                    is Signal.Upstream.Next     -> onNext(signal.value)
+                    is Signal.Upstream.Complete -> { onComplete(); Signal.Downstream.Cancel }
+                    is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
+                }
+            }
+        }
+    }
+}
+
 class None<T : Any> private constructor(
     private val source: suspend () -> Unit,
 ) : Publisher<Nothing> {

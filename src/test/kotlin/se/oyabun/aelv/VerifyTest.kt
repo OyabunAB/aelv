@@ -17,88 +17,163 @@ package se.oyabun.aelv
 
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import kotlin.test.assertIs
 import kotlin.test.assertEquals
-import se.oyabun.aelv.InvalidDemandException
-import se.oyabun.aelv.Many
 
 class VerifyTest {
 
-    @Test
-    fun `emitsNext matches items in order`() {
-        Verify.that(Many.items(1, 2, 3))
-            .emitsNext(1, 2, 3)
-            .completesNormally()
-    }
+    class EmitsNextTest {
 
-    @Test
-    fun `emitsNext fails on wrong value`() {
-        assertFailsWith<IllegalStateException> {
+        @Test fun `matches items in order`() {
             Verify.that(Many.items(1, 2, 3))
-                .emitsNext(1, 99, 3)
+                .emitsNext(1, 2, 3)
+                .completesNormally()
+        }
+
+        @Test fun `fails on wrong value`() {
+            assertFailsWith<IllegalStateException> {
+                Verify.that(Many.items(1, 2, 3))
+                    .emitsNext(1, 99, 3)
+                    .completesNormally()
+            }
+        }
+
+        @Test fun `fails when stream completes before expected item`() {
+            assertFailsWith<Exception> {
+                Verify.that(Many.items(1))
+                    .emitsNext(1, 2)
+                    .completesNormally()
+            }
+        }
+    }
+
+    class EmitsCountTest {
+
+        @Test fun `accepts exactly n items`() {
+            Verify.that(Many.items(1, 2, 3))
+                .emitsCount(3)
+                .completesNormally()
+        }
+
+        @Test fun `accepts zero items on empty stream`() {
+            Verify.that(Many.empty<Int>())
+                .emitsCount(0)
                 .completesNormally()
         }
     }
 
-    @Test
-    fun `emitsCount accepts n items`() {
-        Verify.that(Many.items(1, 2, 3))
-            .emitsCount(3)
-            .completesNormally()
+    class AssertNextTest {
+
+        @Test fun `assertion passes for matching item`() {
+            Verify.that(Many.items(42))
+                .assertNext { assertIs<Int>(it) }
+                .completesNormally()
+        }
+
+        @Test fun `assertion failure propagates`() {
+            assertFailsWith<AssertionError> {
+                Verify.that(Many.items(1))
+                    .assertNext { assertEquals(99, it) }
+                    .completesNormally()
+            }
+        }
     }
 
-    @Test
-    fun `matchesNext asserts item`() {
-        Verify.that(Many.items(42))
-            .matchesNext { assertTrue(it > 40) }
-            .completesNormally()
+    class RunsTest {
+
+        @Test fun `side effect executes between steps`() {
+            var fired = false
+            Verify.that(Many.items(1, 2))
+                .emitsNext(1)
+                .runs { fired = true }
+                .emitsNext(2)
+                .completesNormally()
+            assertEquals(true, fired)
+        }
     }
 
-    @Test
-    fun `runs executes side effect between steps`() {
-        var fired = false
-        Verify.that(Many.items(1, 2))
-            .emitsNext(1)
-            .runs { fired = true }
-            .emitsNext(2)
-            .completesNormally()
-        assertTrue(fired)
+    class ThenCancelsTest {
+
+        @Test fun `stops subscription after cancel`() {
+            Verify.that(Many.items(1, 2, 3))
+                .emitsNext(1)
+                .thenCancels()
+                .verify()
+        }
     }
 
-    @Test
-    fun `thenCancels stops subscription`() {
-        Verify.that(Many.items(1, 2, 3))
-            .emitsNext(1)
-            .thenCancels()
-            .verify()
+    class CompletesNormallyTest {
+
+        @Test fun `passes on empty stream`() {
+            Verify.that(Many.empty<Int>()).completesNormally()
+        }
+
+        @Test fun `passes after all items consumed`() {
+            Verify.that(Many.items(1, 2))
+                .emitsNext(1, 2)
+                .completesNormally()
+        }
+
+        @Test fun `fails when stream errors`() {
+            assertFailsWith<AssertionError> {
+                Verify.that(Many.error<Int>(RuntimeException("boom")))
+                    .completesNormally()
+            }
+        }
     }
 
-    @Test
-    fun `completesNormally fails when stream errors`() {
-        assertFailsWith<AssertionError> {
-            Verify.that(Many.error<Int>(InvalidDemandException(-1)))
+    class CompletesWithErrorTest {
+
+        @Test fun `returns the error`() {
+            val cause = RuntimeException("fail")
+            val error = Verify.that(Many.error<Int>(cause)).completesWithError()
+            assertEquals(cause, error)
+        }
+
+        @Test fun `fails when stream completes normally`() {
+            assertFailsWith<Exception> {
+                Verify.that(Many.empty<Int>()).completesWithError()
+            }
+        }
+    }
+
+    class IsSubscribedTest {
+
+        @Test fun `checkpoint does not consume items`() {
+            Verify.that(Many.items(1, 2))
+                .isSubscribed()
+                .emitsNext(1, 2)
                 .completesNormally()
         }
     }
 
-    @Test
-    fun `completesWithError returns the cause`() {
-        val cause = InvalidDemandException(-1)
-        val error = Verify.that(Many.error<Int>(cause)).completesWithError()
-        assertEquals(cause, error)
+    class IsPresentTest {
+
+        @Test fun `passes when Maybe has value satisfying assertion`() {
+            Verify.that(Maybe.present(42))
+                .isPresent { assertEquals(42, it) }
+                .completesNormally()
+        }
+
+        @Test fun `fails when Maybe is empty`() {
+            assertFailsWith<Exception> {
+                Verify.that(Maybe.empty<Int>())
+                    .isPresent()
+                    .completesNormally()
+            }
+        }
     }
 
-    @Test
-    fun `isSubscribed is a no-op checkpoint`() {
-        Verify.that(Many.items(1))
-            .isSubscribed()
-            .emitsNext(1)
-            .completesNormally()
-    }
+    class IsAbsentTest {
 
-    @Test
-    fun `empty publisher completesNormally`() {
-        Verify.that(Many.empty<Int>())
-            .completesNormally()
+        @Test fun `passes when Maybe is empty`() {
+            Verify.that(Maybe.empty<Int>()).isAbsent()
+        }
+
+        @Test fun `fails when Maybe has value`() {
+            assertFailsWith<Exception> {
+                Verify.that(Maybe.present(1)).isAbsent()
+            }
+        }
     }
 }

@@ -248,7 +248,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
     }
 }
 
-/** Maps each item to a [Many] and subscribes sequentially, preserving upstream order. */
+/** Maps each element to a [One] and flattens, subscribing concurrently up to [concurrency] at a time. */
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     Many.fromStep(Step.ConcatMap(step, transform))
 
@@ -1148,6 +1148,12 @@ fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> 
         )
     }
 
+/**
+ * Maps the single value to a [Many] and subscribes to it, forwarding all items downstream.
+ *
+ * The result type widens from [One] to [Many] because the inner stream can emit zero or more items.
+ * If the inner [Many] itself errors, the error propagates and no further items are emitted.
+ */
 fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         source(
@@ -1164,13 +1170,78 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
         )
     }
 
-fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
+/** Suspend variant of [flatMapMany] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> One<T>.flatMapMany(transform: suspend (T) -> Many<R>): Many<R> =
+    Many.generate { emit ->
+        source(
+            { value ->
+                transform(value).source(
+                    { inner -> emit(Signal.Upstream.Next(inner)) },
+                    { emit(Signal.Upstream.Complete) },
+                    { issue -> emit(Signal.Upstream.Error(issue)) },
+                )
+                Signal.Downstream.Cancel
+            },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/**
+ * Maps the single value to a [Maybe], which may or may not emit a result.
+ *
+ * Use this when the mapping step can legitimately produce no value — the result is a [Maybe]
+ * rather than a [One], reflecting that the downstream may complete empty.
+ * If this [One] errors, the error is forwarded without calling [transform].
+ */
+fun <T : Any, R : Any> One<T>.flatMapMaybe(transform: (T) -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            onComplete,
+            onError,
+        )
+    }
+
+/** Suspend variant of [flatMapMaybe] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> One<T>.flatMapMaybe(transform: suspend (T) -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            onComplete,
+            onError,
+        )
+    }
+
+/**
+ * Maps the single value to a [None] and awaits its completion, discarding the result type.
+ *
+ * The return type is [None] because the entire chain produces no items — only a completion or
+ * error signal.  Any error from the inner [None] is rethrown and terminates the outer stream.
+ */
+fun <T : Any, R : Any> One<T>.flatMapNone(transform: (T) -> None<R>): None<R> =
     None.generate {
-        var failed = false
         source(
             { value ->
                 val innerResult = transform(value).await()
-                if (innerResult is Failure) { failed = true; throw innerResult.value }
+                if (innerResult is Failure) throw innerResult.value
+                Signal.Downstream.Request
+            },
+            { },
+            ::rethrow,
+        )
+    }
+
+/** Suspend variant of [flatMapNone] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> One<T>.flatMapNone(transform: suspend (T) -> None<R>): None<R> =
+    None.generate {
+        source(
+            { value ->
+                val innerResult = transform(value).await()
+                if (innerResult is Failure) throw innerResult.value
                 Signal.Downstream.Request
             },
             { },
@@ -1256,11 +1327,37 @@ fun <T : Any> One<T>.doOnError(action: (Exception) -> Unit): One<T> =
         )
     }
 
+/** Suspend variant of [doOnError] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> One<T>.doOnError(action: suspend (Exception) -> Unit): One<T> =
+    One.generate { emit ->
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> action(issue); emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
 /**
  * Invokes [action] when the stream terminates for any reason: normal completion, error, or
  * downstream cancellation.
  */
 fun <T : Any> One<T>.doFinally(action: (Signal.Terminal) -> Unit): One<T> =
+    One.generate { emit ->
+        source(
+            { value ->
+                val downstream = emit(Signal.Upstream.Next(value))
+                if (downstream == Signal.Downstream.Cancel) action(Signal.Downstream.Cancel)
+                downstream
+            },
+            { action(Signal.Upstream.Complete); emit(Signal.Upstream.Complete) },
+            { issue -> action(Signal.Upstream.Error(issue)); emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [doFinally] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> One<T>.doFinally(action: suspend (Signal.Terminal) -> Unit): One<T> =
     One.generate { emit ->
         source(
             { value ->
@@ -1346,4 +1443,462 @@ fun <T : Any> One<T>.cache(): One<T> {
             is Failure  -> emit(Signal.Upstream.Error(result.value))
         }
     }
+}
+
+/**
+ * Sequences this [None] with a [One] producer: awaits completion of the [None], then subscribes
+ * to the [One] returned by [producer].
+ *
+ * If this [None] errors, [producer] is never called and the error is forwarded.  This is the
+ * primary way to chain a fire-and-forget step before a value-producing step without nesting.
+ */
+fun <T : Any, R : Any> None<T>.then(producer: () -> One<R>): One<R> =
+    One.generate { emit ->
+        val result = await()
+        if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
+        producer().source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [then] returning [One]. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
+    One.generate { emit ->
+        val result = await()
+        if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
+        producer().source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/**
+ * Sequences this [None] with a [Maybe] producer.  The [Maybe] is only subscribed if this [None]
+ * completes without error; an error in the [None] is forwarded and [producer] is skipped.
+ */
+fun <T : Any, R : Any> None<T>.then(producer: () -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        val result = await()
+        if (result is Failure) { onError(result.value); return@Maybe }
+        producer().source(onNext, onComplete, onError)
+    }
+
+/** Suspend variant of [then] returning [Maybe]. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        val result = await()
+        if (result is Failure) { onError(result.value); return@Maybe }
+        producer().source(onNext, onComplete, onError)
+    }
+
+/**
+ * Sequences this [None] with a [Many] producer.  The [Many] is only subscribed if this [None]
+ * completes without error; an error in the [None] terminates the stream without subscribing to
+ * [producer].
+ */
+fun <T : Any, R : Any> None<T>.then(producer: () -> Many<R>): Many<R> =
+    Many.generate { emit ->
+        val result = await()
+        if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
+        producer().source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [then] returning [Many]. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
+    Many.generate { emit ->
+        val result = await()
+        if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
+        producer().source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/**
+ * Sequences two [None]s: awaits this one, then awaits the [None] returned by [producer].
+ * Any error from either step is rethrown, short-circuiting the second step if the first fails.
+ */
+fun <T : Any, R : Any> None<T>.then(producer: () -> None<R>): None<R> =
+    None.generate {
+        val result = await()
+        if (result is Failure) throw result.value
+        producer().await().let { if (it is Failure) throw it.value }
+    }
+
+/** Suspend variant of [then] returning [None]. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> None<T>.then(producer: suspend () -> None<R>): None<R> =
+    None.generate {
+        val result = await()
+        if (result is Failure) throw result.value
+        producer().await().let { if (it is Failure) throw it.value }
+    }
+
+/**
+ * For each upstream item, applies [transform] and awaits the resulting [None] before requesting
+ * the next item.  Items are processed sequentially — the next item is not consumed until the
+ * [None] from the current item has completed.
+ *
+ * The output type is [None] because no values are emitted; the operator is used purely for
+ * side-effecting work (e.g. writes, deletes) that must complete before moving on.
+ */
+fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<Any>): None<T> =
+    None.generate {
+        source(
+            { value ->
+                val result = transform(value).await()
+                if (result is Failure) throw result.value
+                Signal.Downstream.Request
+            },
+            { },
+            ::rethrow,
+        )
+    }
+
+/** Suspend variant of [flatMapNone] on [Many]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<Any>): None<T> =
+    None.generate {
+        source(
+            { value ->
+                val result = transform(value).await()
+                if (result is Failure) throw result.value
+                Signal.Downstream.Request
+            },
+            { },
+            ::rethrow,
+        )
+    }
+
+/**
+ * Maps each item to a [One] and flattens, subscribing concurrently up to the default concurrency.
+ *
+ * Sugar over [flatMap] that keeps the call-site type unambiguous when [transform] returns a [One]
+ * rather than a [Many].  Each inner [One] is lifted to a [Many] before merging, so ordering is
+ * not guaranteed when concurrency > 1.
+ */
+fun <T : Any, R : Any> Many<T>.flatMapOne(transform: (T) -> One<R>): Many<R> =
+    flatMap { value: T -> Many.from(transform(value)) }
+
+/** Suspend variant of [flatMapOne] on [Many]. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Many<T>.flatMapOne(transform: suspend (T) -> One<R>): Many<R> {
+    val asManyTransform: suspend (T) -> Many<R> = { value -> Many.from(transform(value)) }
+    return flatMap(transform = asManyTransform)
+}
+
+fun <T : Any, R : Any> Maybe<T>.map(transform: (T) -> R): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> onNext(transform(value)) },
+            onComplete,
+            onError,
+        )
+    }
+
+/** Suspend variant of [map] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> onNext(transform(value)) },
+            onComplete,
+            onError,
+        )
+    }
+
+/** Keeps the value if [predicate] returns true, otherwise produces an empty [Maybe]. */
+fun <T : Any> Maybe<T>.filter(predicate: (T) -> Boolean): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> if (predicate(value)) onNext(value) else { onComplete(); Signal.Downstream.Cancel } },
+            onComplete,
+            onError,
+        )
+    }
+
+/** Suspend variant of [filter]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> if (predicate(value)) onNext(value) else { onComplete(); Signal.Downstream.Cancel } },
+            onComplete,
+            onError,
+        )
+    }
+
+fun <T : Any, R : Any> Maybe<T>.flatMap(transform: (T) -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            onComplete,
+            onError,
+        )
+    }
+
+/** Suspend variant of [flatMap] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            onComplete,
+            onError,
+        )
+    }
+
+/**
+ * Maps the present value to a [Many] and subscribes to it; if this [Maybe] is empty the result
+ * completes empty without invoking [transform].
+ *
+ * The absent case propagates as an empty [Many] rather than an error, so callers cannot
+ * distinguish between "Maybe was empty" and "inner Many was empty" at the output level — both
+ * yield a [Many] that completes with zero items.
+ */
+fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
+    Many.generate { emit ->
+        source(
+            { value ->
+                transform(value).source(
+                    { inner -> emit(Signal.Upstream.Next(inner)) },
+                    { emit(Signal.Upstream.Complete) },
+                    { issue -> emit(Signal.Upstream.Error(issue)) },
+                )
+                Signal.Downstream.Cancel
+            },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [flatMapMany] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: suspend (T) -> Many<R>): Many<R> =
+    Many.generate { emit ->
+        source(
+            { value ->
+                transform(value).source(
+                    { inner -> emit(Signal.Upstream.Next(inner)) },
+                    { emit(Signal.Upstream.Complete) },
+                    { issue -> emit(Signal.Upstream.Error(issue)) },
+                )
+                Signal.Downstream.Cancel
+            },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/**
+ * Maps the present value to a [None] and awaits completion; if this [Maybe] is empty, completes
+ * immediately without invoking [transform].
+ *
+ * Useful for fire-and-forget side effects that should be skipped when no value is present.
+ */
+fun <T : Any, R : Any> Maybe<T>.flatMapNone(transform: (T) -> None<R>): None<R> =
+    None.generate {
+        source(
+            { value ->
+                val result = transform(value).await()
+                if (result is Failure) throw result.value
+                Signal.Downstream.Cancel
+            },
+            { },
+            ::rethrow,
+        )
+    }
+
+/** Suspend variant of [flatMapNone] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Maybe<T>.flatMapNone(transform: suspend (T) -> None<R>): None<R> =
+    None.generate {
+        source(
+            { value ->
+                val result = transform(value).await()
+                if (result is Failure) throw result.value
+                Signal.Downstream.Cancel
+            },
+            { },
+            ::rethrow,
+        )
+    }
+
+/**
+ * Provides a fallback value when this [Maybe] is empty, producing a [One].
+ *
+ * If this [Maybe] emits a value, that value is forwarded. If it completes empty,
+ * [fallback] is invoked and its result is emitted.
+ */
+fun <T : Any> Maybe<T>.or(fallback: () -> T): One<T> =
+    One.generate { emit ->
+        var emitted = false
+        source(
+            { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
+            {
+                if (!emitted) {
+                    emit(Signal.Upstream.Next(fallback()))
+                }
+                emit(Signal.Upstream.Complete)
+            },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [or] — [fallback] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Maybe<T>.or(fallback: suspend () -> T): One<T> =
+    One.generate { emit ->
+        var emitted = false
+        source(
+            { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
+            {
+                if (!emitted) {
+                    emit(Signal.Upstream.Next(fallback()))
+                }
+                emit(Signal.Upstream.Complete)
+            },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/**
+ * Switches to [fallback] stream when this [Maybe] is empty.
+ *
+ * If this [Maybe] emits a value, that value is forwarded and [fallback] is never subscribed.
+ * If it completes empty, [fallback] is subscribed and its items are forwarded.
+ */
+fun <T : Any> Maybe<T>.orMany(fallback: () -> Many<T>): Many<T> =
+    Many.generate { emit ->
+        var emitted = false
+        source(
+            { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
+            {
+                if (!emitted) {
+                    fallback().source(
+                        { inner -> emit(Signal.Upstream.Next(inner)) },
+                        { emit(Signal.Upstream.Complete) },
+                        { issue -> emit(Signal.Upstream.Error(issue)) },
+                    )
+                } else {
+                    emit(Signal.Upstream.Complete)
+                }
+            },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [orMany]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Maybe<T>.orMany(fallback: suspend () -> Many<T>): Many<T> =
+    Many.generate { emit ->
+        var emitted = false
+        source(
+            { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
+            {
+                if (!emitted) {
+                    fallback().source(
+                        { inner -> emit(Signal.Upstream.Next(inner)) },
+                        { emit(Signal.Upstream.Complete) },
+                        { issue -> emit(Signal.Upstream.Error(issue)) },
+                    )
+                } else {
+                    emit(Signal.Upstream.Complete)
+                }
+            },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Converts to a [Many] that emits zero or one items. */
+fun <T : Any> Maybe<T>.toMany(): Many<T> =
+    Many.generate { emit ->
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/**
+ * Converts to a [One], throwing [NoSuchElementException] if this [Maybe] is empty.
+ *
+ * Use [or] when the empty case is expected and a fallback is available.
+ */
+fun <T : Any> Maybe<T>.toOne(): One<T> =
+    One.defer {
+        var result: T? = null
+        collect { value -> result = value; Signal.Downstream.Cancel }
+        result ?: throw NoSuchElementException()
+    }
+
+fun <T : Any> Maybe<T>.doOnNext(action: (T) -> Unit): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> action(value); onNext(value) },
+            onComplete,
+            onError,
+        )
+    }
+
+/** Suspend variant of [doOnNext]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Maybe<T>.doOnNext(action: suspend (T) -> Unit): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> action(value); onNext(value) },
+            onComplete,
+            onError,
+        )
+    }
+
+fun <T : Any> Maybe<T>.doOnComplete(action: () -> Unit): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(onNext, { action(); onComplete() }, onError)
+    }
+
+fun <T : Any> Maybe<T>.doOnError(action: (Exception) -> Unit): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(onNext, onComplete, { issue -> action(issue); onError(issue) })
+    }
+
+fun <T : Any> Maybe<T>.recover(fallback: (Exception) -> Maybe<T>): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            onNext,
+            onComplete,
+            { issue -> fallback(issue).source(onNext, onComplete, onError) },
+        )
+    }
+
+/** Suspend variant of [recover]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Maybe<T>.recover(fallback: suspend (Exception) -> Maybe<T>): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            onNext,
+            onComplete,
+            { issue -> fallback(issue).source(onNext, onComplete, onError) },
+        )
+    }
+
+suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> = Either.catching {
+    var result: T? = null
+    source(
+        { value -> result = value; Signal.Downstream.Cancel },
+        { },
+        ::rethrow,
+    )
+    result
 }

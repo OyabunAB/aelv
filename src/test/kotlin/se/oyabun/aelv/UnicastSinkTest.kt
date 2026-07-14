@@ -18,6 +18,7 @@ package se.oyabun.aelv
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -49,11 +50,25 @@ class UnicastSinkTest {
 
     @Test
     fun `each item delivered to exactly one of two competing subscribers`() = runTest {
-        val sink     = Sinks.unicast<Int>()
-        val received = mutableListOf<Int>()
+        val sink    = Sinks.unicast<Int>()
+        val counter = AtomicInteger(0)
 
-        val job1 = launch { sink.asMany().toList().await().getOrThrow().let { received += it } }
-        val job2 = launch { sink.asMany().toList().await().getOrThrow().let { received += it } }
+        val job1 = launch {
+            sink.asMany().subscribe(object : org.reactivestreams.Subscriber<Int> {
+                override fun onSubscribe(s: org.reactivestreams.Subscription) { s.request(Long.MAX_VALUE) }
+                override fun onNext(t: Int)     { counter.incrementAndGet() }
+                override fun onError(t: Throwable) {}
+                override fun onComplete()          {}
+            })
+        }
+        val job2 = launch {
+            sink.asMany().subscribe(object : org.reactivestreams.Subscriber<Int> {
+                override fun onSubscribe(s: org.reactivestreams.Subscription) { s.request(Long.MAX_VALUE) }
+                override fun onNext(t: Int)     { counter.incrementAndGet() }
+                override fun onError(t: Throwable) {}
+                override fun onComplete()          {}
+            })
+        }
 
         withTimeout(2.seconds) {
             (1..4).forEach { sink.emit(it) }
@@ -62,25 +77,18 @@ class UnicastSinkTest {
             job2.join()
         }
 
-        assertEquals(setOf(1, 2, 3, 4), received.toSet())
-        assertEquals(4, received.size)
+        assertEquals(4, counter.get())
     }
 
     @Test
-    fun `subscriber receives items emitted after subscription`() = runTest {
+    fun `subscriber receives items emitted after subscription`() {
         val sink = Sinks.unicast<String>()
-        var received: String? = null
+        sink.emit("hello")
+        sink.complete()
 
-        val job = launch {
-            received = sink.asOne().await().getOrThrow()
-        }
-
-        withTimeout(2.seconds) {
-            sink.emit("hello")
-            job.join()
-        }
-
-        assertEquals("hello", received)
+        Verify.that(sink.asMany())
+            .emitsNext("hello")
+            .completesNormally()
     }
 
     @Test

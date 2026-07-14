@@ -65,15 +65,25 @@ class Verify<T : Any> private constructor(
     fun runs(action: () -> Unit): Verify<T>              = apply { steps.add(Step.Runs(action)) }
     fun thenCancels(): Verify<T>                         = apply { steps.add(Step.ThenCancels()) }
 
-    fun verify(within: Duration = timeout)            = runBlocking { executeS(expectComplete = false, within) }
-    fun completesNormally(within: Duration = timeout) = runBlocking { executeS(expectComplete = true,  within) }
+    fun verify(within: Duration = timeout)            = runBlocking { execute(expectComplete = false, within) }
+    fun completesNormally(within: Duration = timeout) = runBlocking { execute(expectComplete = true,  within) }
+    fun completesWithError(within: Duration = timeout): Throwable = runBlocking { completesWithErrorInternal(within) }
 
-    suspend fun verifyS(within: Duration = timeout)            = executeS(expectComplete = false, within)
-    suspend fun completesNormallyS(within: Duration = timeout) = executeS(expectComplete = true,  within)
+    /** Asserts the stream completes immediately with no items emitted. Fails if any item is emitted. */
+    fun completesEmpty(within: Duration = timeout) = runBlocking {
+        val completed  = Channel<Unit>(1)
+        var failed: T? = null
+        publisher.subscribe(object : Subscriber<T> {
+            override fun onSubscribe(s: Subscription) { s.request(Long.MAX_VALUE) }
+            override fun onNext(t: T)                 { failed = t; runCatching { completed.close() } }
+            override fun onError(t: Throwable)        { runCatching { completed.close() } }
+            override fun onComplete()                 { completed.trySend(Unit); runCatching { completed.close() } }
+        })
+        withTimeout(within) { completed.receiveCatching() }
+        check(failed == null) { "expected empty stream but got item: $failed" }
+    }
 
-    fun completesWithError(within: Duration = timeout): Throwable = runBlocking { completesWithErrorS(within) }
-
-    suspend fun completesWithErrorS(within: Duration = timeout): Throwable {
+    private suspend fun completesWithErrorInternal(within: Duration): Throwable {
         val items = Channel<T>(Channel.UNLIMITED)
         var terminalCause: Throwable = IllegalStateException("no error received")
         var hasError = false
@@ -90,7 +100,7 @@ class Verify<T : Any> private constructor(
         return terminalCause
     }
 
-    private suspend fun executeS(expectComplete: Boolean, within: Duration) {
+    private suspend fun execute(expectComplete: Boolean, within: Duration) {
         val items      = Channel<T>(Channel.UNLIMITED)
         var terminal: Terminal = Complete
         var terminalSet = false
@@ -148,5 +158,21 @@ class Verify<T : Any> private constructor(
     companion object {
         fun <T : Any> that(publisher: Publisher<T>, timeout: Duration = 5.seconds): Verify<T> =
             Verify(publisher, timeout)
+
+        fun <T : Any> that(maybe: Maybe<T>, timeout: Duration = 5.seconds): Verify<T> =
+            Verify(maybe, timeout)
     }
 }
+
+/**
+ * Asserts that this [Maybe] is present and satisfies [assertion].
+ * Fails if the [Maybe] is empty.
+ */
+fun <T : Any> Verify<T>.isPresent(assertion: (T) -> Unit = {}): Verify<T> =
+    assertNext(assertion)
+
+/**
+ * Asserts that this [Maybe] completes without emitting a value.
+ * Fails if a value is emitted.
+ */
+fun <T : Any> Verify<T>.isAbsent() = completesEmpty()

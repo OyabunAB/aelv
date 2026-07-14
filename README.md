@@ -23,21 +23,25 @@ dependencies {
 
 ## Types
 
-Three publisher types, each cold and backpressure-aware:
+Four publisher types, each cold and backpressure-aware:
 
 ```mermaid
 %%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart LR
     Many["Many&lt;T&gt; — 0..N"] --> P[Publisher]
     One["One&lt;T&gt; — exactly 1"] --> P
+    Maybe["Maybe&lt;T&gt; — 0 or 1, no nulls"] --> P
     None["None&lt;T&gt; — side-effect"] --> P
 ```
 
 ```kotlin
-val items: Many<Int>  = Many.of(1, 2, 3)
-val single: One<Int>  = One.defer { fetchFromDb() }
-val effect: None<Unit> = None.defer { db.commit() }
+val items: Many<Int>    = Many.of(1, 2, 3)
+val single: One<Int>    = One.defer { fetchFromDb() }
+val maybe: Maybe<Int>   = Maybe.defer { findOrNull() }
+val effect: None<Unit>  = None.defer { db.commit() }
 ```
+
+`Maybe<T>` emits either one item or completes empty — never null, never more than one element.
 
 ## Signals
 
@@ -59,36 +63,76 @@ flowchart LR
 | Category | Operators |
 |---|---|
 | Transform | `map` `mapNotNull` `filter` `take` `takeWhile` `skip` `skipWhile` `distinct` `distinctUntilChanged` `distinctUntilChangedBy` |
-| Expand | `flatMap` `concatMap` `flatMapSequential` `switchMap` |
+| Expand | `flatMap` `flatMapOne` `flatMapNone` `concatMap` `flatMapSequential` `switchMap` |
 | Combine | `merge` `mergeWith` `concat` `zip` `combineLatest` `takeUntilOther` `delaySubscription` |
 | Buffer | `buffer(size)` `buffer(size, skip)` `bufferTimeout` |
 | Group | `groupBy` |
 | Side-effect | `doOnNext` `doOnComplete` `doOnError` `doOnSubscribe` `doFinally` |
 | Error | `recover` `recoverWith` `retry(n)` `retry(Policy)` `onBackpressureDrop` |
 | Context | `publishOn` `subscribeOn` |
-| Terminal | `fold` `reduce` `toList` `toSet` `first` `last` `drain` `subscribe` |
+| Terminal | `fold` `reduce` `toList` `toSet` `first` `firstMaybe` `last` `drain` `subscribe` |
+
+`flatMap(T -> Many<R>)` — standard fan-out, returns `Many<R>`  
+`flatMapOne(T -> One<R>)` — each element maps to exactly one, returns `Many<R>`  
+`flatMapNone(T -> None<R>)` — each element triggers a side-effect, returns `None<R>`
 
 ### One
 
 | Category | Operators |
 |---|---|
-| Transform | `map` `flatMap` `flatMapMany` `flatMapNone` |
+| Transform | `map` `flatMap` `flatMapMany` `flatMapMaybe` `flatMapNone` |
 | Combine | `zipWith` |
 | Side-effect | `doOnNext` `doOnError` `doFinally` |
 | Error | `recover` `retry(n)` `retry(Policy)` |
 | Context | `publishOn` `subscribeOn` |
 | Terminal | `get` `cache` |
 
+`flatMap(T -> One<R>)` — returns `One<R>`  
+`flatMapMany(T -> Many<R>)` — returns `Many<R>`  
+`flatMapMaybe(T -> Maybe<R>)` — returns `Maybe<R>`  
+`flatMapNone(T -> None<R>)` — returns `None<R>`
+
+### Maybe
+
+| Category | Operators |
+|---|---|
+| Transform | `map` `filter` `flatMap` `flatMapMany` `flatMapNone` |
+| Side-effect | `doOnNext` `doOnComplete` `doOnError` `doFinally` |
+| Error | `recover` `retry(n)` `retry(Policy)` |
+| Context | `publishOn` `subscribeOn` |
+| Terminal | `get` `isPresent` `isAbsent` |
+
+`flatMap(T -> Maybe<R>)` — returns `Maybe<R>`  
+`flatMapMany(T -> Many<R>)` — returns `Many<R>`  
+`flatMapNone(T -> None<R>)` — returns `None<R>`
+
 ### None
 
 | Category | Operators |
 |---|---|
+| Chain | `then(() -> One<R>)` `then(() -> Maybe<R>)` `then(() -> Many<R>)` `then(() -> None<R>)` |
 | Terminal | `await` |
+
+`then` chains a subsequent publisher that runs after the side-effect completes, returning the appropriate type.
 
 ### zip
 
 ```kotlin
 zip(One.of(1), One.of("a")) { n, s -> "$n$s" }  // One<String> → "1a"
+```
+
+## Conversions
+
+| Expression | Result |
+|---|---|
+| `one.toMaybe()` | `Maybe<T>` — wraps the single value |
+| `one.toMany()` | `Many<T>` — stream of one element |
+| `many.firstMaybe()` | `Maybe<T>` — first element or empty |
+| `none.toMany()` | `Many<T>` — empty stream after effect completes |
+
+```kotlin
+val maybeUser: Maybe<User> = One.defer { db.findUser(id) }.toMaybe()
+val firstHit: Maybe<Result> = results.firstMaybe()
 ```
 
 ## Sink
@@ -146,7 +190,20 @@ Verify.that(publisher)
     .runs { source.emit(1) }
     .emitsNext(1)
     .completesNormally()
+
+// Maybe / None helpers
+Verify.that(maybePublisher).completesEmpty()
+Verify.that(maybePublisher).isPresent { it == expected }
+Verify.that(maybePublisher).isAbsent()
 ```
+
+| Method | Applicable to |
+|---|---|
+| `completesNormally()` | Many, One, Maybe, None |
+| `completesEmpty()` | Maybe, Many |
+| `isPresent { predicate }` | Maybe |
+| `isAbsent()` | Maybe |
+| `emitsNext(value)` | Many, One |
 
 ## RS Compliance
 
