@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
+
 package se.oyabun.aelv
 
+import kotlin.internal.LowPriorityInOverloadResolution
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -43,6 +46,17 @@ fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
     return Many.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
 }
 
+/** Suspend variant of [map] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Many<T>.map(transform: suspend (T) -> R): Many<R> =
+    Many.fused { onNext, onComplete, onError ->
+        source(
+            { value -> onNext(transform(value)) },
+            onComplete,
+            onError,
+        )
+    }
+
 /**
  * Applies [transform] to each item and emits the result only when it is non-null.
  * Null results are silently dropped and demand is replenished from upstream.
@@ -56,10 +70,32 @@ fun <T : Any, R : Any> Many<T>.mapNotNull(transform: (T) -> R?): Many<R> =
         )
     }
 
+/** Suspend variant of [mapNotNull] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Many<T>.mapNotNull(transform: suspend (T) -> R?): Many<R> =
+    Many.fused { onNext, onComplete, onError ->
+        source(
+            { value -> val result = transform(value); if (result != null) onNext(result) else Signal.Downstream.Request },
+            onComplete,
+            onError,
+        )
+    }
+
 fun <T : Any> Many<T>.filter(predicate: (T) -> Boolean): Many<T> {
     val currentFusion = fusion
     return Many.fromStep(Step.Filter(step, predicate), if (currentFusion is Fusion.Available) FilterFusion(currentFusion, predicate) else Fusion.None)
 }
+
+/** Suspend variant of [filter] — [predicate] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.filter(predicate: suspend (T) -> Boolean): Many<T> =
+    Many.fused { onNext, onComplete, onError ->
+        source(
+            { value -> if (predicate(value)) onNext(value) else Signal.Downstream.Request },
+            onComplete,
+            onError,
+        )
+    }
 
 /** Emits at most [n] items then completes.  Requires `n >= 0`. */
 fun <T : Any> Many<T>.take(n: Long): Many<T> {
@@ -105,6 +141,32 @@ fun <T : Any> Many<T>.distinct(): Many<T> =
         source({ value -> if (seen.add(value)) onNext(value) else Signal.Downstream.Request }, onComplete, onError)
     }
 
+/**
+ * Accumulates state across items, emitting the running state after each element.
+ *
+ * Unlike [fold], which produces a single terminal value, [scan] emits intermediate
+ * states as they are produced. The [initial] state is not emitted; the first emission
+ * is the result of applying [accumulate] to [initial] and the first upstream item.
+ *
+ * Example — running sum:
+ * ```kotlin
+ * Many.items(1, 2, 3).scan(0) { sum, n -> sum + n }
+ * // emits: 1, 3, 6
+ * ```
+ */
+fun <T : Any, S : Any> Many<T>.scan(initial: S, accumulate: (S, T) -> S): Many<S> =
+    Many.fused { onNext, onComplete, onError ->
+        var state = initial
+        source(
+            { value ->
+                state = accumulate(state, value)
+                onNext(state)
+            },
+            onComplete,
+            onError,
+        )
+    }
+
 /** Suppresses consecutive duplicate items; non-adjacent duplicates are still emitted. */
 fun <T : Any> Many<T>.distinctUntilChanged(): Many<T> =
     Many.fused { onNext, onComplete, onError ->
@@ -143,9 +205,76 @@ fun <T : Any, R : Any> Many<T>.flatMap(
 ): Many<R> = if (concurrency == 1) Many.fromStep(Step.ConcatMap(step, transform))
              else Many.fromStep(Step.FlatMap(step, concurrency, transform))
 
+/** Suspend variant of [flatMap] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Many<T>.flatMap(
+    concurrency: Int = 256,
+    transform: suspend (T) -> Many<R>,
+): Many<R> = Many.generate { emit ->
+    val semaphore = Semaphore(concurrency)
+    val mutex = kotlinx.coroutines.sync.Mutex()
+    var cancelled = false
+    var outerError: Any = Unset
+    coroutineScope {
+        source(
+            { value ->
+                if (cancelled) return@source Signal.Downstream.Cancel
+                semaphore.withPermit {
+                    transform(value).source(
+                        { inner ->
+                            mutex.withLock {
+                                if (cancelled) Signal.Downstream.Cancel
+                                else {
+                                    val downstream = emit(Signal.Upstream.Next(inner))
+                                    if (downstream == Signal.Downstream.Cancel) cancelled = true
+                                    downstream
+                                }
+                            }
+                        },
+                        {},
+                        { issue -> if (outerError === Unset) outerError = issue },
+                    )
+                }
+                Signal.Downstream.Request
+            },
+            {},
+            { issue -> if (outerError === Unset) outerError = issue },
+        )
+    }
+    when {
+        cancelled       -> {}
+        outerError.isError() -> emit(Signal.Upstream.Error(outerError.asError()))
+        else            -> emit(Signal.Upstream.Complete)
+    }
+}
+
 /** Maps each item to a [Many] and subscribes sequentially, preserving upstream order. */
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     Many.fromStep(Step.ConcatMap(step, transform))
+
+/** Suspend variant of [concatMap] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Many<T>.concatMap(transform: suspend (T) -> Many<R>): Many<R> =
+    Many.generate { emit ->
+        var cancelled = false
+        source(
+            { value ->
+                if (cancelled) return@source Signal.Downstream.Cancel
+                transform(value).source(
+                    { inner ->
+                        val downstream = emit(Signal.Upstream.Next(inner))
+                        if (downstream == Signal.Downstream.Cancel) cancelled = true
+                        downstream
+                    },
+                    {},
+                    { issue -> emit(Signal.Upstream.Error(issue)); cancelled = true },
+                )
+                if (cancelled) Signal.Downstream.Cancel else Signal.Downstream.Request
+            },
+            { if (!cancelled) emit(Signal.Upstream.Complete) },
+            { issue -> if (!cancelled) emit(Signal.Upstream.Error(issue)) },
+        )
+    }
 
 /**
  * Maps each item to a [Many], subscribing to up to [maxConcurrency] inner streams concurrently,
@@ -742,6 +871,17 @@ fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
         )
     }
 
+/** Suspend variant of [doOnNext] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.doOnNext(action: suspend (T) -> Unit): Many<T> =
+    Many.generate { emit ->
+        source(
+            { value -> action(value); emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
 fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
     Many.generate { emit ->
         source(
@@ -751,7 +891,29 @@ fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
         )
     }
 
+/** Suspend variant of [doOnComplete] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.doOnComplete(action: suspend () -> Unit): Many<T> =
+    Many.generate { emit ->
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { action(); emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
 fun <T : Any> Many<T>.doOnError(action: (Exception) -> Unit): Many<T> =
+    Many.generate { emit ->
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> action(issue); emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [doOnError] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.doOnError(action: suspend (Exception) -> Unit): Many<T> =
     Many.generate { emit ->
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
@@ -787,11 +949,39 @@ fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
         )
     }
 
+/** Suspend variant of [doFinally] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.doFinally(action: suspend (Signal.Terminal) -> Unit): Many<T> =
+    Many.generate { emit ->
+        source(
+            { value ->
+                val downstream = emit(Signal.Upstream.Next(value))
+                if (downstream == Signal.Downstream.Cancel) action(Signal.Downstream.Cancel)
+                downstream
+            },
+            { action(Signal.Upstream.Complete); emit(Signal.Upstream.Complete) },
+            { issue -> action(Signal.Upstream.Error(issue)); emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
 /**
  * On error, switches to the [Many] returned by [fallback], continuing from there.
  * On normal completion, [fallback] is not invoked.
  */
 fun <T : Any> Many<T>.recover(fallback: (Exception) -> Many<T>): Many<T> =
+    Many.generate { emit ->
+        val result = collect { emit(Signal.Upstream.Next(it)) }
+        if (result is Failure) fallback(result.value).source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+        else emit(Signal.Upstream.Complete)
+    }
+
+/** Suspend variant of [recover] — [fallback] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Many<T>.recover(fallback: suspend (Exception) -> Many<T>): Many<T> =
     Many.generate { emit ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
         if (result is Failure) fallback(result.value).source(
@@ -913,7 +1103,36 @@ fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
         )
     }
 
+/** Suspend variant of [map] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
+    One.generate { emit ->
+        source(
+            { value -> emit(Signal.Upstream.Next(transform(value))) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
 fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
+    One.generate { emit ->
+        source(
+            { value ->
+                transform(value).source(
+                    { inner -> emit(Signal.Upstream.Next(inner)) },
+                    { emit(Signal.Upstream.Complete) },
+                    { issue -> emit(Signal.Upstream.Error(issue)) },
+                )
+                Signal.Downstream.Cancel
+            },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [flatMap] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> =
     One.generate { emit ->
         source(
             { value ->
@@ -969,6 +1188,17 @@ fun <T : Any> One<T>.recover(fallback: (Exception) -> T): One<T> =
         emit(Signal.Upstream.Complete)
     }
 
+/** Suspend variant of [recover] — [fallback] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> One<T>.recover(fallback: suspend (Exception) -> T): One<T> =
+    One.generate { emit ->
+        val result = collect { emit(Signal.Upstream.Next(it)) }
+        if (result is Failure) {
+            if (emit(Signal.Upstream.Next(fallback(result.value))) == Signal.Downstream.Cancel) return@generate
+        }
+        emit(Signal.Upstream.Complete)
+    }
+
 /** Re-subscribes to the source on error, up to [times] times.  Defaults to unbounded retries. */
 fun <T : Any> One<T>.retry(times: Long = Long.MAX_VALUE): One<T> =
     retry(Policy.retry().maxAttempts(times))
@@ -998,6 +1228,17 @@ fun <T : Any> One<T>.retry(policy: Policy.Retry): One<T> =
     }
 
 fun <T : Any> One<T>.doOnNext(action: (T) -> Unit): One<T> =
+    One.generate { emit ->
+        source(
+            { value -> action(value); emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { issue -> emit(Signal.Upstream.Error(issue)) },
+        )
+    }
+
+/** Suspend variant of [doOnNext] — [action] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any> One<T>.doOnNext(action: suspend (T) -> Unit): One<T> =
     One.generate { emit ->
         source(
             { value -> action(value); emit(Signal.Upstream.Next(value)) },

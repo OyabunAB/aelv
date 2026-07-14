@@ -78,7 +78,7 @@ sealed class Sink<T : Any>(
 
     fun complete() = terminate(Signal.Upstream.Complete)
 
-    fun error(cause: AelvException) = terminate(Signal.Upstream.Error(cause))
+    fun error(cause: Exception) = terminate(Signal.Upstream.Error(cause))
 
     private fun terminate(signal: Signal.Upstream<T>) {
         if (!terminal.compareAndSet(Unset, signal)) return

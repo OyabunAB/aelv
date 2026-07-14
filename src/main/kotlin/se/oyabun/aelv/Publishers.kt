@@ -156,6 +156,12 @@ class Many<T : Any> private constructor(
 
         fun <T : Any> defer(factory: () -> Many<T>): Many<T> = Many(Step.Defer(factory))
 
+        /** Suspend variant of [defer] — the factory may itself be a suspend function. */
+        fun <T : Any> defer(factory: suspend () -> Many<T>): Many<T> =
+            fused { onNext, onComplete, onError ->
+                factory().source(onNext, onComplete, onError)
+            }
+
         fun <T : Any> pipelineFrom(): Many<T> = Many(Step.PipelineSource(), SourceFusion())
 
         fun interval(period: Duration): Many<Long> = fused { onNext, onComplete, _ ->

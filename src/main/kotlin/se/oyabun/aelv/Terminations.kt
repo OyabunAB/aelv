@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
+
 package se.oyabun.aelv
 
+import kotlin.internal.LowPriorityInOverloadResolution
 import org.reactivestreams.Subscription
 
 /**
@@ -121,6 +124,18 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
         }
     }
 
+/** Suspend variant of [fold] — [accumulate] may call suspend functions. */
+@LowPriorityInOverloadResolution
+fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: suspend (R, T) -> R): One<R> =
+    One.generate { emit ->
+        var accumulator = initial
+        val result = collect { value -> accumulator = accumulate(accumulator, value); Signal.Downstream.Request }
+        when (result) {
+            is Success  -> { emit(Signal.Upstream.Next(accumulator)); emit(Signal.Upstream.Complete) }
+            is Failure -> emit(Signal.Upstream.Error(result.value))
+        }
+    }
+
 /**
  * Reduces all items to a single value by applying [accumulate] pairwise.
  *
@@ -208,3 +223,9 @@ suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
         else                   -> NoSuchElementException().left()
     }
 }
+
+/** Consumes and discards all items. Await the returned [None] to suspend until completion. */
+fun <T : Any> Many<T>.discard(): None<T> = None.defer { collect { Signal.Downstream.Request } }
+
+/** Discards the value. Await the returned [None] to suspend until completion. */
+fun <T : Any> One<T>.discard(): None<T> = None.defer { collect { Signal.Downstream.Request } }
