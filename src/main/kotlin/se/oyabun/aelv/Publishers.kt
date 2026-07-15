@@ -321,9 +321,17 @@ class One<T : Any> private constructor(
             }
         }
 
-        fun <T : Any> from(publisher: Publisher<T>): One<T> = One { onNext, onComplete, _ ->
-            publisher.asFlow().collectCancelling { value -> onNext(value); false }
-            onComplete()
+        @Suppress("UNCHECKED_CAST")
+        fun <T : Any> from(publisher: Publisher<T>): One<T> = One { onNext, onComplete, onError ->
+            when (publisher) {
+                is Many<*> -> (publisher as Many<T>).source(
+                    { value -> onNext(value); Signal.Downstream.Cancel },
+                    onComplete,
+                    onError,
+                )
+                is One<*>  -> (publisher as One<T>).source(onNext, onComplete, onError)
+                else       -> { publisher.asFlow().collectCancelling { value -> onNext(value); false }; onComplete() }
+            }
         }
 
         fun <T : Any> error(cause: Exception): One<T> = One { _, _, onError -> onError(cause) }

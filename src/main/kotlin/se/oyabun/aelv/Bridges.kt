@@ -41,25 +41,54 @@ fun <T : Any> Publisher<T>.asOne(): One<T> = One.from(this)
 fun <T : Any> Publisher<T>.asNone(): None<T> = None.from(this)
 
 /** Lifts this [One] into a [Many] that emits the single value and completes. */
-fun <T : Any> One<T>.toMany(): Many<T> = Many.from(this)
+fun <T : Any> One<T>.toMany(): Many<T> = Many.fused { onNext, onComplete, onError ->
+    source(
+        { value -> onNext(value) },
+        onComplete,
+        onError,
+    )
+}
 
 /** Lifts this [None] into a [Many] that completes immediately with no items. */
-fun <T : Any> None<T>.toMany(): Many<T> = Many.from(this as org.reactivestreams.Publisher<T>)
+fun <T : Any> None<T>.toMany(): Many<T> = Many.fused { _, onComplete, onError ->
+    val result = await()
+    if (result is Failure) onError(result.value) else onComplete()
+}
 
 /**
  * Lifts this [One] into a [Maybe] that always has a value present.
  *
- * Internally wraps via [Maybe.from], which subscribes to this [One] as a [Publisher] and takes
- * its first item.  Because [One] guarantees exactly one item, the result is always present unless
- * the source errors — in which case the error propagates.
+ * Uses [One.source] directly to preserve the coroutine context of the caller.
  */
-fun <T : Any> One<T>.toMaybe(): Maybe<T> = Maybe.from(this)
+fun <T : Any> One<T>.toMaybe(): Maybe<T> = Maybe { onNext, onComplete, onError ->
+    source(onNext, onComplete, onError)
+}
 
 /**
  * Takes the first item from this [Many] and wraps it in a [Maybe].
+ *
+ * Uses [Many.source] directly rather than the [Publisher] bridge, preserving the
+ * coroutine context of the caller — including any context elements installed via
+ * [kotlinx.coroutines.withContext].
  *
  * If the stream completes without emitting, the [Maybe] is empty.  If it emits at least one item,
  * the [Maybe] is present with that item and the remaining upstream items are discarded (the
  * subscription is cancelled).  Errors are forwarded as [Maybe] errors.
  */
-fun <T : Any> Many<T>.firstMaybe(): Maybe<T> = Maybe.from(this)
+fun <T : Any> Many<T>.firstMaybe(): Maybe<T> = Maybe { onNext, onComplete, onError ->
+    var emitted = false
+    source(
+        { value ->
+            if (!emitted) {
+                emitted = true
+                onNext(value)
+                onComplete()
+                Signal.Downstream.Cancel
+            } else {
+                Signal.Downstream.Cancel
+            }
+        },
+        { if (!emitted) onComplete() },
+        { issue -> onError(issue) },
+    )
+}

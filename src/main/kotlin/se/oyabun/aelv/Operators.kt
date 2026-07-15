@@ -33,8 +33,10 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import org.reactivestreams.Publisher
@@ -1906,4 +1908,114 @@ suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> = Either.catching 
         ::rethrow,
     )
     result
+}
+
+/**
+ * Acquires a resource before subscribing to [use], and releases it when the pipeline terminates —
+ * whether by completion, error, or cancellation.
+ *
+ * [release] is forced back onto the dispatcher that was active when [acquire] ran. This prevents
+ * a pipeline that switches dispatchers internally from releasing on a different dispatcher, which
+ * could deadlock if [release] needs to return the resource to a pool that is already exhausted
+ * on the current dispatcher.
+ */
+fun <R : Any, T : Any> Many.Companion.resource(
+    acquire: suspend () -> R,
+    release: suspend (R, Throwable?) -> Unit,
+    use:     (R) -> Many<T>,
+): Many<T> = Many.fused { onNext, onComplete, onError ->
+    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
+    val resource   = acquire()
+    var cause: Throwable? = null
+    try {
+        use(resource).source(
+            onNext,
+            onComplete,
+            { error -> cause = error; onError(error) },
+        )
+    } catch (thrown: Throwable) {
+        cause = thrown
+        throw thrown
+    } finally {
+        val releaseContext = if (dispatcher != null) currentCoroutineContext() + dispatcher + NonCancellable else currentCoroutineContext() + NonCancellable
+        withContext(releaseContext) { release(resource, cause) }
+    }
+}
+
+/**
+ * [Many.resource] variant for [One] — acquires before the single-item pipeline subscribes,
+ * releases when it terminates. Same dispatcher-pinning guarantee on [release].
+ */
+fun <R : Any, T : Any> One.Companion.resource(
+    acquire: suspend () -> R,
+    release: suspend (R, Throwable?) -> Unit,
+    use:     (R) -> One<T>,
+): One<T> = One { onNext, onComplete, onError ->
+    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
+    val resource   = acquire()
+    var cause: Throwable? = null
+    try {
+        use(resource).source(
+            onNext,
+            onComplete,
+            { error -> cause = error; onError(error) },
+        )
+    } catch (thrown: Throwable) {
+        cause = thrown
+        throw thrown
+    } finally {
+        val releaseContext = if (dispatcher != null) currentCoroutineContext() + dispatcher + NonCancellable else currentCoroutineContext() + NonCancellable
+        withContext(releaseContext) { release(resource, cause) }
+    }
+}
+
+/**
+ * [Many.resource] variant for [Maybe] — acquires before the optional pipeline subscribes,
+ * releases when it terminates. Same dispatcher-pinning guarantee on [release].
+ */
+fun <R : Any, T : Any> Maybe.Companion.resource(
+    acquire: suspend () -> R,
+    release: suspend (R, Throwable?) -> Unit,
+    use:     (R) -> Maybe<T>,
+): Maybe<T> = Maybe { onNext, onComplete, onError ->
+    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
+    val resource   = acquire()
+    var cause: Throwable? = null
+    try {
+        use(resource).source(
+            onNext,
+            onComplete,
+            { error -> cause = error; onError(error) },
+        )
+    } catch (thrown: Throwable) {
+        cause = thrown
+        throw thrown
+    } finally {
+        val releaseContext = if (dispatcher != null) currentCoroutineContext() + dispatcher + NonCancellable else currentCoroutineContext() + NonCancellable
+        withContext(releaseContext) { release(resource, cause) }
+    }
+}
+
+/**
+ * [Many.resource] variant for [None] — acquires before the completion pipeline runs,
+ * releases when it terminates. Same dispatcher-pinning guarantee on [release].
+ */
+fun <R : Any, T : Any> None.Companion.resource(
+    acquire: suspend () -> R,
+    release: suspend (R, Throwable?) -> Unit,
+    use:     (R) -> None<T>,
+): None<T> = None.defer {
+    val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
+    val resource   = acquire()
+    var cause: Throwable? = null
+    try {
+        val result = use(resource).await()
+        if (result is Failure) { cause = result.value; throw result.value }
+    } catch (thrown: Throwable) {
+        if (cause == null) cause = thrown
+        throw thrown
+    } finally {
+        val releaseContext = if (dispatcher != null) currentCoroutineContext() + dispatcher + NonCancellable else currentCoroutineContext() + NonCancellable
+        withContext(releaseContext) { release(resource, cause) }
+    }
 }
