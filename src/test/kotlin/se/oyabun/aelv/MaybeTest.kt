@@ -28,7 +28,7 @@ class MaybeTest {
 
         @Test fun `present emits value and completes`() {
             Verify.that(Maybe.present(42))
-                .isPresent { assertEquals(42, it) }
+                .assertNext { assertEquals(42, it) }
                 .completesNormally()
         }
 
@@ -44,7 +44,7 @@ class MaybeTest {
 
         @Test fun `defer with non-null result produces present`() {
             Verify.that(Maybe.defer { 42 })
-                .isPresent { assertEquals(42, it) }
+                .assertNext { assertEquals(42, it) }
                 .completesNormally()
         }
 
@@ -60,13 +60,13 @@ class MaybeTest {
 
         @Test fun `One toMaybe produces present`() {
             Verify.that(One.single(99).toMaybe())
-                .isPresent { assertEquals(99, it) }
+                .assertNext { assertEquals(99, it) }
                 .completesNormally()
         }
 
         @Test fun `firstMaybe on non-empty Many produces present with first item`() {
             Verify.that(Many.items(1, 2, 3).firstMaybe())
-                .isPresent { assertEquals(1, it) }
+                .assertNext { assertEquals(1, it) }
                 .completesNormally()
         }
 
@@ -79,7 +79,7 @@ class MaybeTest {
 
         @Test fun `transforms present value`() {
             Verify.that(Maybe.present(3).map { it * 2 })
-                .isPresent { assertEquals(6, it) }
+                .assertNext { assertEquals(6, it) }
                 .completesNormally()
         }
 
@@ -89,7 +89,7 @@ class MaybeTest {
 
         @Test fun `suspend variant transforms value`() = runTest {
             Verify.that(Maybe.present("hello").map(transform = suspend { s: String -> s.length }))
-                .isPresent { assertEquals(5, it) }
+                .assertNext { assertEquals(5, it) }
                 .completesNormally()
         }
     }
@@ -98,7 +98,7 @@ class MaybeTest {
 
         @Test fun `keeps value when predicate matches`() {
             Verify.that(Maybe.present(10).filter { it > 5 })
-                .isPresent { assertEquals(10, it) }
+                .assertNext { assertEquals(10, it) }
                 .completesNormally()
         }
 
@@ -115,7 +115,7 @@ class MaybeTest {
 
         @Test fun `present to present`() {
             Verify.that(Maybe.present(2).flatMap { value: Int -> Maybe.present(value * 10) })
-                .isPresent { assertEquals(20, it) }
+                .assertNext { assertEquals(20, it) }
                 .completesNormally()
         }
 
@@ -236,13 +236,13 @@ class MaybeTest {
 
         @Test fun `replaces error with fallback Maybe`() {
             Verify.that(Maybe.error<Int>(RuntimeException("bad")).recover { Maybe.present(0) })
-                .isPresent { assertEquals(0, it) }
+                .assertNext { assertEquals(0, it) }
                 .completesNormally()
         }
 
         @Test fun `passes through non-error`() {
             Verify.that(Maybe.present(5).recover { Maybe.present(0) })
-                .isPresent { assertEquals(5, it) }
+                .assertNext { assertEquals(5, it) }
                 .completesNormally()
         }
     }

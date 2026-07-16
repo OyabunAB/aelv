@@ -79,19 +79,6 @@ class VerifyTest {
         }
     }
 
-    class RunsTest {
-
-        @Test fun `side effect executes between steps`() {
-            var fired = false
-            Verify.that(Many.items(1, 2))
-                .emitsNext(1)
-                .runs { fired = true }
-                .emitsNext(2)
-                .completesNormally()
-            assertEquals(true, fired)
-        }
-    }
-
     class ThenCancelsTest {
 
         @Test fun `stops subscription after cancel`() {
@@ -141,7 +128,6 @@ class VerifyTest {
 
         @Test fun `checkpoint does not consume items`() {
             Verify.that(Many.items(1, 2))
-                .isSubscribed()
                 .emitsNext(1, 2)
                 .completesNormally()
         }
@@ -151,14 +137,14 @@ class VerifyTest {
 
         @Test fun `passes when Maybe has value satisfying assertion`() {
             Verify.that(Maybe.present(42))
-                .isPresent { assertEquals(42, it) }
+                .assertNext { assertEquals(42, it) }
                 .completesNormally()
         }
 
         @Test fun `fails when Maybe is empty`() {
             assertFailsWith<Exception> {
                 Verify.that(Maybe.empty<Int>())
-                    .isPresent()
+                    .assertNext { }
                     .completesNormally()
             }
         }

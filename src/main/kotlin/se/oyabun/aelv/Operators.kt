@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 @file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
-
+@file:OptIn(ExperimentalTypeInference::class)
 package se.oyabun.aelv
+
+import kotlin.experimental.ExperimentalTypeInference
 
 import kotlin.internal.LowPriorityInOverloadResolution
 import kotlinx.coroutines.CancellationException
@@ -532,11 +534,11 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
             }
             var zipError: Any = Unset
             while (when (val signalA = channelA.receive()) {
-                is Signal.Upstream.Complete -> false
-                is Signal.Upstream.Error    -> { zipError = signalA.cause; false }
+                is Signal.Upstream.Complete -> { jobB.cancel(); false }
+                is Signal.Upstream.Error    -> { jobB.cancel(); zipError = signalA.cause; false }
                 is Signal.Upstream.Next     -> when (val signalB = channelB.receive()) {
-                    is Signal.Upstream.Complete -> false
-                    is Signal.Upstream.Error    -> { zipError = signalB.cause; false }
+                    is Signal.Upstream.Complete -> { jobA.cancel(); false }
+                    is Signal.Upstream.Error    -> { jobA.cancel(); zipError = signalB.cause; false }
                     is Signal.Upstream.Next     -> emit(Signal.Upstream.Next(transform(signalA.value, signalB.value))) != Signal.Downstream.Cancel
                 }
             }) {}
@@ -1459,6 +1461,7 @@ fun <T : Any> One<T>.cache(): One<T> {
  * If this [None] errors, [producer] is never called and the error is forwarded.  This is the
  * primary way to chain a fire-and-forget step before a value-producing step without nesting.
  */
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: () -> One<R>): One<R> =
     One.generate { emit ->
         val result = await()
@@ -1472,6 +1475,7 @@ fun <T : Any, R : Any> None<T>.then(producer: () -> One<R>): One<R> =
 
 /** Suspend variant of [then] returning [One]. */
 @LowPriorityInOverloadResolution
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
     One.generate { emit ->
         val result = await()
@@ -1487,6 +1491,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
  * Sequences this [None] with a [Maybe] producer.  The [Maybe] is only subscribed if this [None]
  * completes without error; an error in the [None] is forwarded and [producer] is skipped.
  */
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: () -> Maybe<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         val result = await()
@@ -1496,6 +1501,7 @@ fun <T : Any, R : Any> None<T>.then(producer: () -> Maybe<R>): Maybe<R> =
 
 /** Suspend variant of [then] returning [Maybe]. */
 @LowPriorityInOverloadResolution
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         val result = await()
@@ -1508,6 +1514,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> 
  * completes without error; an error in the [None] terminates the stream without subscribing to
  * [producer].
  */
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: () -> Many<R>): Many<R> =
     Many.generate { emit ->
         val result = await()
@@ -1521,6 +1528,7 @@ fun <T : Any, R : Any> None<T>.then(producer: () -> Many<R>): Many<R> =
 
 /** Suspend variant of [then] returning [Many]. */
 @LowPriorityInOverloadResolution
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
     Many.generate { emit ->
         val result = await()
@@ -1536,6 +1544,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
  * Sequences two [None]s: awaits this one, then awaits the [None] returned by [producer].
  * Any error from either step is rethrown, short-circuiting the second step if the first fails.
  */
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: () -> None<R>): None<R> =
     None.generate {
         val result = await()
@@ -1545,11 +1554,27 @@ fun <T : Any, R : Any> None<T>.then(producer: () -> None<R>): None<R> =
 
 /** Suspend variant of [then] returning [None]. */
 @LowPriorityInOverloadResolution
+@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> None<R>): None<R> =
     None.generate {
         val result = await()
         if (result is Failure) throw result.value
         producer().await().let { if (it is Failure) throw it.value }
+    }
+
+/** Recovers from an error by substituting a fallback [None] pipeline. */
+fun <T : Any> None<T>.recover(fallback: (Exception) -> None<T>): None<T> =
+    None.generate {
+        val result = await()
+        if (result is Failure) fallback(result.value).await().let { if (it is Failure) throw it.value }
+    }
+
+/** Suspend variant of [recover][None.recover]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> None<T>.recover(fallback: suspend (Exception) -> None<T>): None<T> =
+    None.generate {
+        val result = await()
+        if (result is Failure) fallback(result.value).await().let { if (it is Failure) throw it.value }
     }
 
 /**
@@ -1560,7 +1585,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> None<R>): None<R> =
  * The output type is [None] because no values are emitted; the operator is used purely for
  * side-effecting work (e.g. writes, deletes) that must complete before moving on.
  */
-fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<Any>): None<T> =
+fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<*>): None<T> =
     None.generate {
         source(
             { value ->
@@ -1575,7 +1600,7 @@ fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<Any>): None<T> =
 
 /** Suspend variant of [flatMapNone] on [Many]. */
 @LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<Any>): None<T> =
+fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
     None.generate {
         source(
             { value ->

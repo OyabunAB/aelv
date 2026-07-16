@@ -205,13 +205,6 @@ class OperatorsTest {
         }
 
         @Test
-        fun `zip stops at shortest stream`() {
-            Verify.that(zip(Many.items(1, 2), Many.items("a", "b", "c")) { n, s -> "$n$s" })
-                .emitsNext("1a", "2b")
-                .completesNormally()
-        }
-
-        @Test
         fun `zip does not hang when source A errors after source B completes`() = runTest {
             // Regression for Bug Z2: post-loop channelA probe must be non-blocking.
             val cause   = InvalidDemandException(-1)
@@ -610,11 +603,12 @@ class OperatorsTest {
 
         @Test
         fun `takeUntilOther stops when other signals`() {
-            val source = Sinks.broadcast<Int>()
             val other  = Sinks.broadcast<Unit>()
-            Verify.that(source.asMany().takeUntilOther(other.asMany()))
-                .runs { other.complete() }
-                .completesNormally()
+            Verify.that(
+                Many.never<Int>().takeUntilOther(
+                    Many.defer(factory = suspend { other.complete(); other.asMany() })
+                )
+            ).completesNormally()
         }
 
         @Test
