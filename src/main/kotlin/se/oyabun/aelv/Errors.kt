@@ -34,11 +34,19 @@ sealed class Either<out A, out B> {
     fun isLeft(): Boolean = this is Left
     /** Returns true if this is a [Right]. */
     fun isRight(): Boolean = this is Right
+    /** Returns true if this is a [Right] — semantic alias for [isRight]. */
+    fun isOk(): Boolean = this is Right
+    /** Returns true if this is a [Left] — semantic alias for [isLeft]. */
+    fun isError(): Boolean = this is Left
 
     /** Returns the [Left] value, or null if this is a [Right]. */
     fun leftOrNull(): A? = if (this is Left) value else null
     /** Returns the [Right] value, or null if this is a [Left]. */
     fun rightOrNull(): B? = if (this is Right) value else null
+    /** Returns the success value, or null if this is an error — semantic alias for [rightOrNull]. */
+    fun okOrNull(): B? = if (this is Right) value else null
+    /** Returns the error value, or null if this is a success — semantic alias for [leftOrNull]. */
+    fun errorOrNull(): A? = if (this is Left) value else null
 
     /** Returns the [Left] value. If this is a [Right], throws the right value when it is a [Throwable]; otherwise wraps it in [IllegalStateException]. */
     fun leftOrThrow(): A = when (this) {
@@ -78,6 +86,11 @@ sealed class Either<out A, out B> {
             try { kotlinx.coroutines.withTimeout(timeout) { block() }.right() }
             catch (issue: kotlinx.coroutines.TimeoutCancellationException) { TimeoutException(timeout).left() }
             catch (issue: Exception) { if (issue is kotlinx.coroutines.CancellationException) throw issue; issue.left() }
+
+        /** Constructs a success outcome — alias for [Either.Right]. */
+        fun <T> success(value: T): Either<Nothing, T> = Right(value)
+        /** Constructs a failure outcome — alias for [Either.Left]. */
+        fun <E> failure(error: E): Either<E, Nothing> = Left(error)
     }
 }
 

@@ -16,7 +16,6 @@
 package se.oyabun.aelv
 
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ClosedSendChannelException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -49,40 +48,22 @@ sealed class Sink<T : Any>(
     private val history     = ArrayDeque<Signal.Upstream.Next<T>>()
     private val subscribers = CopyOnWriteArrayList<Channel<Signal.Upstream<T>>>()
 
-    /**
-     * Suspends when the slowest subscriber's channel buffer is full — this is the backpressure mechanism.
-     * A slow subscriber blocks [emit] for all other subscribers until it drains.
-     */
-    suspend fun emit(value: T) {
+    fun emit(value: T) {
+        if (terminal.get().notUnset()) return
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
-            if (terminal.get().notUnset()) return
             if (historySize > 0) {
                 history.addLast(signal)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
-        }
-        for (inbox in subscribers) {
-            inbox.sendOrDiscard(signal)
+            subscribers.forEach { inbox -> inbox.trySend(signal) }
         }
     }
 
-    /**
-     * Returns false if any subscriber's buffer is full, even if others have capacity.
-     * A single slow subscriber causes all [tryEmit] calls to return false.
-     */
+    /** Returns false if the sink is terminated. */
     fun tryEmit(value: T): Boolean {
         if (terminal.get().notUnset()) return false
-        val signal = Signal.Upstream.Next(value)
-        lock.withLock {
-            if (historySize > 0) {
-                history.addLast(signal)
-                if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
-            }
-            for (inbox in subscribers) {
-                if (!inbox.trySend(signal).isSuccess) return false
-            }
-        }
+        emit(value)
         return true
     }
 

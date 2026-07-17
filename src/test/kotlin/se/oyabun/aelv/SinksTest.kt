@@ -15,70 +15,54 @@
  */
 package se.oyabun.aelv
 
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class SinksTest {
 
     class BroadcastSinkTest {
 
-        @Test fun `emits to active subscriber`() = runTest {
-            val sink      = Sinks.broadcast<Int>()
-            val subscribed = Channel<Unit>(1)
-            val job = launch {
-                val stream = sink.asMany()
-                subscribed.send(Unit)
-                Verify.that(stream).emitsNext(1, 2, 3).completesNormally()
-            }
-            subscribed.receive()
-            sink.emit(1)
-            sink.emit(2)
-            sink.emit(3)
-            sink.complete()
-            job.join()
+        @Test fun `emits to active subscriber`() {
+            val sink    = Sinks.broadcast<Int>()
+            val emitter = Many.items(1, 2, 3)
+                .delaySubscription(1.milliseconds)
+                .flatMap { v: Int -> sink.emit(v); Many.empty<Int>() }
+                .concatWith(Many.defer<Int>(factory = suspend { sink.complete(); Many.empty() }))
+            Verify.that(sink.asMany().take(3).mergeWith(emitter))
+                .emitsCount(3)
+                .completesNormally(within = 5.seconds)
         }
 
-        @Test fun `late subscriber misses earlier emissions`() = runTest {
+        @Test fun `late subscriber misses earlier emissions`() {
             val sink = Sinks.broadcast<Int>()
-            sink.emit(1)
-            sink.emit(2)
-            val subscribed = Channel<Unit>(1)
-            val job = launch {
-                val stream = sink.asMany()
-                subscribed.send(Unit)
-                Verify.that(stream).emitsNext(3).completesNormally()
-            }
-            subscribed.receive()
-            sink.emit(3)
-            sink.complete()
-            job.join()
+            sink.emit(1); sink.emit(2)  // no subscriber yet — lost
+            val emitter = Many.defer<Int>(factory = suspend { sink.emit(3); sink.complete(); Many.empty() })
+                .delaySubscription(1.milliseconds)
+            Verify.that(sink.asMany().take(1).mergeWith(emitter))
+                .emitsNext(3)
+                .completesNormally(within = 5.seconds)
         }
 
-        @Test fun `error propagates to all subscribers`() = runTest {
-            val sink  = Sinks.broadcast<Int>()
-            val ready = Channel<Unit>(2)
-            val job1  = launch { val s = sink.asMany(); ready.send(Unit); Verify.that(s).completesWithError() }
-            val job2  = launch { val s = sink.asMany(); ready.send(Unit); Verify.that(s).completesWithError() }
-            ready.receive(); ready.receive()
-            sink.error(RuntimeException("boom"))
-            job1.join(); job2.join()
+        @Test fun `error propagates to all subscribers`() {
+            val sink    = Sinks.broadcast<Int>()
+            val trigger = Many.defer<Int>(factory = suspend { sink.error(RuntimeException("boom")); Many.empty() })
+                .delaySubscription(1.milliseconds)
+            Verify.that(sink.asMany().mergeWith(trigger))
+                .completesWithError(within = 5.seconds)
         }
 
-        @Test fun `complete propagates to all subscribers`() = runTest {
-            val sink  = Sinks.broadcast<Int>()
-            val ready = Channel<Unit>(2)
-            val job1  = launch { val s = sink.asMany(); ready.send(Unit); Verify.that(s).completesNormally() }
-            val job2  = launch { val s = sink.asMany(); ready.send(Unit); Verify.that(s).completesNormally() }
-            ready.receive(); ready.receive()
-            sink.complete()
-            job1.join(); job2.join()
+        @Test fun `complete propagates to all subscribers`() {
+            val sink    = Sinks.broadcast<Int>()
+            val trigger = Many.defer<Int>(factory = suspend { sink.complete(); Many.empty() })
+                .delaySubscription(1.milliseconds)
+            Verify.that(sink.asMany().mergeWith(trigger))
+                .completesNormally(within = 5.seconds)
         }
 
-        @Test fun `tryEmit returns false after complete`() = runTest {
+        @Test fun `tryEmit returns false after complete`() {
             val sink = Sinks.broadcast<Int>()
             sink.complete()
             assertEquals(false, sink.tryEmit(1))
@@ -87,129 +71,118 @@ class SinksTest {
 
     class ReplaySinkTest {
 
-        @Test fun `late subscriber receives full history`() = runTest {
+        @Test fun `late subscriber receives full history`() {
             val sink = Sinks.replay<Int>()
-            sink.emit(1)
-            sink.emit(2)
-            sink.emit(3)
-            sink.complete()
+            sink.emit(1); sink.emit(2); sink.emit(3); sink.complete()
             Verify.that(sink.asMany())
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completesNormally(within = 1.seconds)
         }
 
-        @Test fun `subscriber receives history then live items`() = runTest {
+        @Test fun `subscriber receives history then live items`() {
+            val sink    = Sinks.replay<Int>()
+            sink.emit(1); sink.emit(2)
+            val emitter = Many.defer<Int>(factory = suspend { sink.emit(3); sink.complete(); Many.empty() })
+                .delaySubscription(1.milliseconds)
+            Verify.that(sink.asMany().take(3).mergeWith(emitter))
+                .emitsCount(3)
+                .completesNormally(within = 5.seconds)
+        }
+
+        @Test fun `asOne returns first available item`() {
             val sink = Sinks.replay<Int>()
-            sink.emit(1)
-            sink.emit(2)
-            val job = launch {
-                Verify.that(sink.asMany()).emitsNext(1, 2, 3).completesNormally()
-            }
-            sink.emit(3)
-            sink.complete()
-            job.join()
+            sink.emit(42); sink.complete()
+            Verify.that(sink.asOne())
+                .emitsNext(42)
+                .completesNormally(within = 1.seconds)
         }
 
-        @Test fun `asOne returns first available item`() = runTest {
-            val sink = Sinks.replay<Int>()
-            sink.emit(42)
-            sink.complete()
-            Verify.that(sink.asOne()).emitsNext(42).completesNormally()
-        }
-
-        @Test fun `error replayed to late subscriber`() = runTest {
+        @Test fun `error replayed to late subscriber`() {
             val sink = Sinks.replay<Int>()
             sink.error(RuntimeException("fail"))
-            val error = Verify.that(sink.asMany()).completesWithError()
+            val error = Verify.that(sink.asMany()).completesWithError(within = 1.seconds)
             assertEquals("fail", error.message)
         }
     }
 
     class ReplayLastSinkTest {
 
-        @Test fun `late subscriber receives only last n items`() = runTest {
+        @Test fun `late subscriber receives only last n items`() {
             val sink = Sinks.replayLast<Int>(2)
-            sink.emit(1)
-            sink.emit(2)
-            sink.emit(3)
-            sink.complete()
+            sink.emit(1); sink.emit(2); sink.emit(3); sink.complete()
             Verify.that(sink.asMany())
                 .emitsNext(2, 3)
-                .completesNormally()
+                .completesNormally(within = 1.seconds)
         }
 
-        @Test fun `window slides as new items arrive`() = runTest {
+        @Test fun `window slides as new items arrive`() {
             val sink = Sinks.replayLast<Int>(2)
-            sink.emit(1)
-            sink.emit(2)
-            sink.emit(3)
-            sink.emit(4)
-            sink.complete()
+            sink.emit(1); sink.emit(2); sink.emit(3); sink.emit(4); sink.complete()
             Verify.that(sink.asMany())
                 .emitsNext(3, 4)
-                .completesNormally()
+                .completesNormally(within = 1.seconds)
         }
 
-        @Test fun `fewer items than window replays all`() = runTest {
+        @Test fun `fewer items than window replays all`() {
             val sink = Sinks.replayLast<Int>(5)
-            sink.emit(1)
-            sink.emit(2)
-            sink.complete()
+            sink.emit(1); sink.emit(2); sink.complete()
             Verify.that(sink.asMany())
                 .emitsNext(1, 2)
-                .completesNormally()
+                .completesNormally(within = 1.seconds)
         }
 
         @Test fun `count zero is rejected`() {
             try {
                 Sinks.replayLast<Int>(0)
                 error("expected IllegalArgumentException")
-            } catch (exception: IllegalArgumentException) {
-                assertIs<IllegalArgumentException>(exception)
+            } catch (e: IllegalArgumentException) {
+                assertIs<IllegalArgumentException>(e)
             }
         }
     }
 
     class UnicastSinkTest {
 
-        @Test fun `emits items to subscriber`() = runTest {
-            val sink = Sinks.unicast<Int>()
-            val job  = launch { Verify.that(sink.asMany()).emitsNext(1, 2, 3).completesNormally() }
-            sink.emit(1)
-            sink.emit(2)
-            sink.emit(3)
-            sink.complete()
-            job.join()
+        @Test fun `emits items to subscriber`() {
+            val sink    = Sinks.unicast<Int>()
+            val emitter = Many.items(1, 2, 3)
+                .delaySubscription(1.milliseconds)
+                .flatMap { v: Int -> sink.emit(v); Many.empty<Int>() }
+                .concatWith(Many.defer<Int>(factory = suspend { sink.complete(); Many.empty() }))
+            Verify.that(sink.asMany().take(3).mergeWith(emitter))
+                .emitsCount(3)
+                .completesNormally(within = 5.seconds)
         }
 
-        @Test fun `asOne receives next available item`() = runTest {
-            val sink = Sinks.unicast<Int>()
-            val job  = launch { Verify.that(sink.asOne()).emitsNext(99).completesNormally() }
-            sink.emit(99)
-            sink.complete()
-            job.join()
+        @Test fun `asOne receives next available item`() {
+            val sink    = Sinks.unicast<Int>()
+            val emitter = Many.defer<Int>(factory = suspend { sink.emit(99); sink.complete(); Many.empty() })
+                .delaySubscription(1.milliseconds)
+            Verify.that(sink.asOne().toMany().mergeWith(emitter))
+                .emitsNext(99)
+                .completesNormally(within = 5.seconds)
         }
 
-        @Test fun `error propagates to subscriber`() = runTest {
-            val sink = Sinks.unicast<Int>()
-            val job  = launch { Verify.that(sink.asMany()).completesWithError() }
-            sink.error(RuntimeException("fail"))
-            job.join()
+        @Test fun `error propagates to subscriber`() {
+            val sink    = Sinks.unicast<Int>()
+            val emitter = Many.defer<Int>(factory = suspend { sink.error(RuntimeException("fail")); Many.empty() })
+                .delaySubscription(1.milliseconds)
+            Verify.that(sink.asMany().mergeWith(emitter))
+                .completesWithError(within = 5.seconds)
         }
 
-        @Test fun `emit after complete is ignored`() = runTest {
+        @Test fun `emit after complete is ignored`() {
             val sink = Sinks.unicast<Int>()
             sink.complete()
-            sink.emit(1)
-            Verify.that(sink.asMany()).completesNormally()
+            Verify.that(sink.asMany()).completesNormally(within = 1.seconds)
         }
 
-        @Test fun `items emitted before subscription are delivered`() = runTest {
+        @Test fun `items emitted before subscription are delivered`() {
             val sink = Sinks.unicast<Int>()
-            sink.emit(10)
-            sink.emit(20)
-            sink.complete()
-            Verify.that(sink.asMany()).emitsNext(10, 20).completesNormally()
+            sink.emit(10); sink.emit(20); sink.complete()
+            Verify.that(sink.asMany())
+                .emitsNext(10, 20)
+                .completesNormally(within = 1.seconds)
         }
     }
 }

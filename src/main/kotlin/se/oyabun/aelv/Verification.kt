@@ -26,12 +26,17 @@ import kotlin.time.Duration.Companion.seconds
  * Pipeline-based verifier for aelv publishers.
  *
  * Each step returns a new [Verify] wrapping a transformed pipeline.
- * The terminals ([completesNormally], [completesWithError], [completesEmpty])
- * subscribe via [runBlocking] — the only blocking point.
+ * The terminal methods require an explicit [within] duration — how long
+ * this specific assertion is expected to complete in.
+ *
+ * ```kotlin
+ * Verify.that(pipeline)
+ *     .assertNext { assertEquals(1, it) }
+ *     .completesNormally(within = 100.milliseconds)
+ * ```
  */
 class Verify<T : Any> private constructor(
     private val pipeline: Many<T>,
-    private val timeout:  Duration        = 5.seconds,
     private val context:  CoroutineContext = EmptyCoroutineContext,
 ) {
 
@@ -41,7 +46,7 @@ class Verify<T : Any> private constructor(
                 .or { error("expected at least one item but stream was empty") }
                 .map { value -> assertion(value); value }
                 .toMany(),
-            timeout, context,
+            context,
         )
 
     fun emitsNext(vararg values: T): Verify<T> =
@@ -53,60 +58,68 @@ class Verify<T : Any> private constructor(
                     actual
                 }
                 .flatMapMany { Many.empty() },
-            timeout, context,
+            context,
         )
 
     fun emitsCount(count: Long): Verify<T> =
-        Verify(pipeline.take(count), timeout, context)
+        Verify(
+            pipeline.fold(0L) { acc, _ -> acc + 1 }
+                .map { actual -> check(actual == count) { "expected $count items but got $actual" }; actual }
+                .flatMapMany { Many.empty() },
+            context,
+        )
 
-    fun thenCancels(): Verify<T> =
-        Verify(pipeline.take(0), timeout, context)
+    fun thenCancels(): Verify<T> = Verify(pipeline.take(0), context)
 
-    fun completesEmpty() = runBlocking(context + CoroutineName("verify")) {
+    fun completesEmpty(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
         pipeline
             .flatMapNone { value: T -> None.error<T>(IllegalStateException("expected empty but got: $value")) }
-            .await()
-            .getOrThrow()
+            .thenReturn(Unit)
+            .await(within)
+            .fold(
+                onLeft  = { throw AssertionError("expected empty completion but got error: ${it.message}", it) },
+                onRight = { },
+            )
     }
 
-    fun completesNormally() = runBlocking(context + CoroutineName("verify")) {
-        pipeline.discard().await().getOrThrow()
-    }
-
-    fun completesWithError(): Exception = runBlocking(context + CoroutineName("verify")) {
-        pipeline.discard().await().fold(
-            onLeft  = { it },
-            onRight = { error("expected error but stream completed normally") },
+    fun completesNormally(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
+        pipeline.discard().thenReturn(Unit).await(within).fold(
+            onLeft  = { throw AssertionError("expected normal completion but got error: ${it.message}", it) },
+            onRight = { },
         )
     }
 
-    fun verify() = completesNormally()
+    fun completesWithError(within: Duration = DEFAULT_TIMEOUT): Exception = runBlocking(context + CoroutineName("verify")) {
+        pipeline.discard().thenReturn(Unit).await(within).fold(
+            onLeft  = { it },
+            onRight = { throw AssertionError("expected error but stream completed normally") },
+        )
+    }
+
+    fun verify(within: Duration = DEFAULT_TIMEOUT) = completesNormally(within)
 
     companion object {
+        val DEFAULT_TIMEOUT = 5.seconds
         fun <T : Any> that(
             pipeline: Many<T>,
-            timeout:  Duration        = 5.seconds,
             context:  CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(pipeline, timeout, context)
+        ): Verify<T> = Verify(pipeline, context)
 
         fun <T : Any> that(
             one:     One<T>,
-            timeout: Duration        = 5.seconds,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(one.toMany(), timeout, context)
+        ): Verify<T> = Verify(one.toMany(), context)
 
         fun <T : Any> that(
             maybe:   Maybe<T>,
-            timeout: Duration        = 5.seconds,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(maybe.toMany(), timeout, context)
+        ): Verify<T> = Verify(maybe.toMany(), context)
 
         fun <T : Any> that(
             none:    None<T>,
-            timeout: Duration        = 5.seconds,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(none.toMany(), timeout, context)
+        ): Verify<T> = Verify(none.toMany(), context)
     }
 }
 
-fun <T : Any> Verify<T>.isAbsent() = completesEmpty()
+

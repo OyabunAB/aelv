@@ -31,7 +31,7 @@ class VerifyTest {
         }
 
         @Test fun `fails on wrong value`() {
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<AssertionError> {
                 Verify.that(Many.items(1, 2, 3))
                     .emitsNext(1, 99, 3)
                     .completesNormally()
@@ -39,7 +39,7 @@ class VerifyTest {
         }
 
         @Test fun `fails when stream completes before expected item`() {
-            assertFailsWith<Exception> {
+            assertFailsWith<AssertionError> {
                 Verify.that(Many.items(1))
                     .emitsNext(1, 2)
                     .completesNormally()
@@ -114,11 +114,12 @@ class VerifyTest {
         @Test fun `returns the error`() {
             val cause = RuntimeException("fail")
             val error = Verify.that(Many.error<Int>(cause)).completesWithError()
-            assertEquals(cause, error)
+            assertIs<RuntimeException>(error)
+            assertEquals("fail", error.message)
         }
 
         @Test fun `fails when stream completes normally`() {
-            assertFailsWith<Exception> {
+            assertFailsWith<AssertionError> {
                 Verify.that(Many.empty<Int>()).completesWithError()
             }
         }
@@ -142,7 +143,7 @@ class VerifyTest {
         }
 
         @Test fun `fails when Maybe is empty`() {
-            assertFailsWith<Exception> {
+            assertFailsWith<AssertionError> {
                 Verify.that(Maybe.empty<Int>())
                     .assertNext { }
                     .completesNormally()
@@ -153,12 +154,12 @@ class VerifyTest {
     class IsAbsentTest {
 
         @Test fun `passes when Maybe is empty`() {
-            Verify.that(Maybe.empty<Int>()).isAbsent()
+            Verify.that(Maybe.empty<Int>()).completesEmpty()
         }
 
         @Test fun `fails when Maybe has value`() {
-            assertFailsWith<Exception> {
-                Verify.that(Maybe.present(1)).isAbsent()
+            assertFailsWith<AssertionError> {
+                Verify.that(Maybe.present(1)).completesEmpty()
             }
         }
     }

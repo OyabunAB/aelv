@@ -224,8 +224,8 @@ suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
     }
 }
 
-/** Consumes and discards all items. Await the returned [None] to suspend until completion. */
-fun <T : Any> Many<T>.discard(): None<T> = None.defer { collect { Signal.Downstream.Request } }
+/** Consumes and discards all items. Errors propagate. */
+fun <T : Any> Many<T>.discard(): None<T> = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }
 
-/** Discards the value. Await the returned [None] to suspend until completion. */
-fun <T : Any> One<T>.discard(): None<T> = None.defer { collect { Signal.Downstream.Request } }
+/** Discards the value. Errors propagate. */
+fun <T : Any> One<T>.discard(): None<T>  = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }

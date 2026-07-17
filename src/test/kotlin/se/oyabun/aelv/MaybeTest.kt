@@ -33,7 +33,7 @@ class MaybeTest {
         }
 
         @Test fun `empty completes without emitting`() {
-            Verify.that(Maybe.empty<Int>()).isAbsent()
+            Verify.that(Maybe.empty<Int>()).completesEmpty()
         }
 
         @Test fun `error propagates`() {
@@ -49,7 +49,7 @@ class MaybeTest {
         }
 
         @Test fun `defer with null result produces empty`() {
-            Verify.that(Maybe.defer<Int> { null }).isAbsent()
+            Verify.that(Maybe.defer<Int> { null }).completesEmpty()
         }
 
         @Test fun `defer with exception propagates as error`() {
@@ -71,7 +71,7 @@ class MaybeTest {
         }
 
         @Test fun `firstMaybe on empty Many produces empty`() {
-            Verify.that(Many.empty<Int>().firstMaybe()).isAbsent()
+            Verify.that(Many.empty<Int>().firstMaybe()).completesEmpty()
         }
     }
 
@@ -84,7 +84,7 @@ class MaybeTest {
         }
 
         @Test fun `on empty stays empty`() {
-            Verify.that(Maybe.empty<Int>().map { it * 2 }).isAbsent()
+            Verify.that(Maybe.empty<Int>().map { it * 2 }).completesEmpty()
         }
 
         @Test fun `suspend variant transforms value`() = runTest {
@@ -103,11 +103,11 @@ class MaybeTest {
         }
 
         @Test fun `removes value when predicate does not match`() {
-            Verify.that(Maybe.present(3).filter { it > 5 }).isAbsent()
+            Verify.that(Maybe.present(3).filter { it > 5 }).completesEmpty()
         }
 
         @Test fun `on empty stays empty`() {
-            Verify.that(Maybe.empty<Int>().filter { it > 5 }).isAbsent()
+            Verify.that(Maybe.empty<Int>().filter { it > 5 }).completesEmpty()
         }
     }
 
@@ -120,11 +120,11 @@ class MaybeTest {
         }
 
         @Test fun `present to empty`() {
-            Verify.that(Maybe.present(2).flatMap { _: Int -> Maybe.empty<Int>() }).isAbsent()
+            Verify.that(Maybe.present(2).flatMap { _: Int -> Maybe.empty<Int>() }).completesEmpty()
         }
 
         @Test fun `empty stays empty`() {
-            Verify.that(Maybe.empty<Int>().flatMap { value: Int -> Maybe.present(value * 10) }).isAbsent()
+            Verify.that(Maybe.empty<Int>().flatMap { value: Int -> Maybe.present(value * 10) }).completesEmpty()
         }
 
         @Test fun `flatMapMany expands to Many`() {

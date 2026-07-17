@@ -44,6 +44,7 @@ internal class Log(private val slf4j: Slf4jLogger) {
         fun error(op: String, cause: Throwable) = slf4j.warn(cause) { "[$op] error" }
         fun retrying(op: String, attempt: Long, cause: Throwable) = slf4j.debug(cause) { "[$op] retrying (attempt $attempt)" }
         fun retryExhausted(op: String, cause: Throwable) = slf4j.warn(cause) { "[$op] retries exhausted" }
+        fun sideEffectThrew(op: String, cause: Throwable) = slf4j.warn(cause) { "[$op] side-effect threw — ignoring" }
     }
 
     inner class Subscription {

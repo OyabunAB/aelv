@@ -794,14 +794,14 @@ class OperatorsTest {
         @Test
         fun `flatMapNone chains to None`() = runTest {
             var ran = false
-            One.single(42).flatMapNone { None.defer { ran = true } }.await()
+            One.single(42).flatMapNone { None.defer<Unit> { ran = true } }.await()
             assertTrue(ran)
         }
 
         @Test
         fun `flatMapNone propagates error from One`() {
             val cause = InvalidDemandException(-1)
-            Verify.that(One.error<Int>(cause).flatMapNone { None.complete() })
+            Verify.that(One.error<Int>(cause).flatMapNone { None.complete<Unit>() })
                 .completesWithError()
         }
     }
