@@ -28,6 +28,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
+import org.reactivestreams.Publisher
 
 private val log = Logging.of<One<*>>()
 
@@ -404,3 +405,38 @@ fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) 
     zip(this, other, transform)
 
 fun <T : Any, R : Any> One<T>.thenReturn(value: R): One<R>   = map { value }
+
+/**
+ * Delays subscription to this [One] by [delay] before subscribing to the source.
+ * The source is subscribed only after the delay has elapsed.
+ */
+fun <T : Any> One<T>.delaySubscription(delay: Duration): One<T> =
+    One.generate { emit ->
+        kotlinx.coroutines.delay(delay)
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { cause -> emit(Signal.Upstream.Error(cause)) },
+        )
+    }
+
+/**
+ * Delays subscription to this [One] until the [trigger] publisher emits an item or completes.
+ * The trigger's first signal starts the subscription; the trigger itself is then cancelled.
+ * If the trigger errors, the error is forwarded and this source is never subscribed.
+ */
+fun <T : Any> One<T>.delaySubscription(trigger: Publisher<*>): One<T> =
+    One.generate { emit ->
+        var triggerFailed = false
+        Many.from(trigger).source(
+            { Signal.Downstream.Cancel },
+            { },
+            { cause -> triggerFailed = true; emit(Signal.Upstream.Error(cause)) },
+        )
+        if (triggerFailed) return@generate
+        source(
+            { value -> emit(Signal.Upstream.Next(value)) },
+            { emit(Signal.Upstream.Complete) },
+            { cause -> emit(Signal.Upstream.Error(cause)) },
+        )
+    }

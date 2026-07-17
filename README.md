@@ -23,7 +23,7 @@ repositories {
 }
 
 dependencies {
-    implementation("se.oyabun:aelv:1.0.0-rc.5")
+    implementation("se.oyabun:aelv:1.0.0-rc.6")
 }
 ```
 
@@ -239,6 +239,6 @@ Any async operator routes through the full protocol with demand signalling and c
 
 ## Status
 
-Current release: `1.0.0-rc.5`
+Current release: `1.0.0-rc.6`
 
-All operators across `Many`, `One`, `Maybe`, and `None` are implemented and tested. `resource` bracket always runs release even on downstream cancel. `Either.success()`/`Either.failure()` companion factories added. `flatMapNone` on all four types. `doOn*` side-effect operators on all types. `subscribeOn`/`publishOn` on `Maybe` and `None`. `UnicastSink` now enforces single-subscriber semantics — a second subscriber receives `IllegalStateException` immediately. Operator files split by type: `ManyOperators.kt`, `OneOperators.kt`, `MaybeOperators.kt`, `NoneOperators.kt`. No breaking changes are planned before `1.0.0`.
+All operators across `Many`, `One`, `Maybe`, and `None` are implemented and tested. `resource` bracket always runs release even on downstream cancel. `Either.success()`/`Either.failure()` companion factories added. `flatMapNone` on all four types. `doOn*` side-effect operators on all types. `subscribeOn`/`publishOn` on `Maybe` and `None`. `UnicastSink` now enforces single-subscriber semantics — a second subscriber receives `IllegalStateException` immediately. Operator files split by type: `ManyOperators.kt`, `OneOperators.kt`, `MaybeOperators.kt`, `NoneOperators.kt`. rc.6 adds KDoc comments to `delaySubscription` and `retry` on `One`, `Maybe`, and `None`, and expands test coverage for `delaySubscription(Duration)` on all four types and `retry(times)` on `Maybe` and `None`. No breaking changes are planned before `1.0.0`.

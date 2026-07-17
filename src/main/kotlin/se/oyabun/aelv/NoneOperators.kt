@@ -19,9 +19,12 @@ package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
 import kotlin.internal.LowPriorityInOverloadResolution
+import kotlin.time.Duration
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
+import org.reactivestreams.Publisher
 
 private val log = Logging.of<None<*>>()
 
@@ -217,3 +220,62 @@ fun <T : Any> None<T>.publishOn(context: CoroutineContext): None<T> =
     toMany().publishOn(context).discard()
 
 fun <T : Any, R : Any> None<T>.thenReturn(value: R): One<R>  = then { One.single(value) }
+
+/**
+ * Delays subscription to this [None] by [delay] before subscribing to the source.
+ * The source is subscribed only after the delay has elapsed.
+ */
+fun <T : Any> None<T>.delaySubscription(delay: Duration): None<T> =
+    None.generate {
+        kotlinx.coroutines.delay(delay)
+        val result = await()
+        if (result is Failure) throw result.value
+    }
+
+/**
+ * Delays subscription to this [None] until the [trigger] publisher emits an item or completes.
+ * The trigger's first signal starts the subscription; the trigger itself is then cancelled.
+ * If the trigger errors, the error is forwarded and this source is never subscribed.
+ */
+fun <T : Any> None<T>.delaySubscription(trigger: Publisher<*>): None<T> =
+    None.generate {
+        var triggerFailed: Exception? = null
+        Many.from(trigger).source(
+            { Signal.Downstream.Cancel },
+            { },
+            { cause -> triggerFailed = cause },
+        )
+        triggerFailed?.let { throw it }
+        val result = await()
+        if (result is Failure) throw result.value
+    }
+
+/**
+ * Re-subscribes to the source on error up to [times] times.
+ * Delegates to [retry] with a policy capped at [times] attempts.
+ */
+fun <T : Any> None<T>.retry(times: Long = Long.MAX_VALUE): None<T> =
+    retry(Policy.retry().maxAttempts(times))
+
+/**
+ * Re-subscribes to the source on error according to [policy].
+ * The policy controls the error filter, maximum attempt count, and backoff strategy.
+ */
+fun <T : Any> None<T>.retry(policy: Policy.Retry): None<T> =
+    None.generate {
+        var attempts = 0L
+        while (true) {
+            val result = await()
+            when {
+                result is Success                               -> break
+                !policy.filter((result as Either.Left).value)  -> throw result.value
+                attempts >= policy.maxAttempts                 -> { log.operator.retryExhausted("retry", result.value); throw result.value }
+                else -> {
+                    log.operator.retrying("retry", attempts, result.value)
+                    val backoffDelay = policy.backoff.delayFor(attempts)
+                    if (backoffDelay.isPositive()) delay(backoffDelay)
+                    attempts++
+                }
+            }
+        }
+    }

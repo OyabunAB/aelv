@@ -634,6 +634,39 @@ class OperatorsTest {
             Verify.that(Many.items(1, 2).delaySubscription(Many.error<Unit>(cause)))
                 .completesWithError()
         }
+
+        @Test
+        fun `One delaySubscription emits value after delay`() {
+            Verify.that(One.single(42).delaySubscription(10.milliseconds))
+                .emitsNext(42)
+                .completesNormally()
+        }
+
+        @Test
+        fun `One delaySubscription with trigger emits value after trigger`() {
+            Verify.that(One.single(7).delaySubscription(Many.items(Unit)))
+                .emitsNext(7)
+                .completesNormally()
+        }
+
+        @Test
+        fun `Maybe delaySubscription emits present value after delay`() {
+            Verify.that(Maybe.present(99).delaySubscription(10.milliseconds))
+                .assertNext { assertEquals(99, it) }
+                .completesNormally()
+        }
+
+        @Test
+        fun `Maybe delaySubscription on empty completes empty after delay`() {
+            Verify.that(Maybe.empty<Int>().delaySubscription(10.milliseconds))
+                .completesEmpty()
+        }
+
+        @Test
+        fun `None delaySubscription completes after delay`() {
+            Verify.that(None.complete<Unit>().delaySubscription(10.milliseconds))
+                .completesNormally()
+        }
     }
 
     class OnBackpressureDrop {
@@ -983,6 +1016,50 @@ class OperatorsTest {
             Verify.that(sink.asMany())
                 .emitsNext(1, 2)
                 .completesNormally()
+        }
+    }
+
+    class MaybeRetry {
+
+        @Test
+        fun `Maybe retry retries on error then succeeds`() = runTest {
+            var attempts = 0
+            Verify.that(Maybe.defer {
+                attempts++
+                if (attempts < 3) throw InvalidDemandException(-1)
+                42
+            }.retry(times = 3))
+                .assertNext { assertEquals(42, it) }
+                .completesNormally()
+            assertEquals(3, attempts)
+        }
+
+        @Test
+        fun `Maybe retry exhausts and propagates error`() {
+            val cause = InvalidDemandException(-1)
+            Verify.that(Maybe.error<Int>(cause).retry(times = 2))
+                .completesWithError()
+        }
+    }
+
+    class NoneRetry {
+
+        @Test
+        fun `None retry retries on error then succeeds`() = runTest {
+            var attempts = 0
+            Verify.that(None.defer<Unit> {
+                attempts++
+                if (attempts < 3) throw InvalidDemandException(-1)
+            }.retry(times = 3))
+                .completesNormally()
+            assertEquals(3, attempts)
+        }
+
+        @Test
+        fun `None retry exhausts and propagates error`() {
+            val cause = InvalidDemandException(-1)
+            Verify.that(None.error<Unit>(cause).retry(times = 2))
+                .completesWithError()
         }
     }
 }
