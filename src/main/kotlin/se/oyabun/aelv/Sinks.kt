@@ -167,18 +167,19 @@ object Sinks {
 }
 
 /**
- * A unicast push source — each emitted item is delivered to exactly one subscriber.
+ * A unicast push source — exactly one subscriber is permitted for the lifetime of this sink.
  *
- * Multiple subscribers compete for items via [asMany]; each item goes to exactly one.
- * [asOne] takes the next available item as a [One].
+ * A second call to [asMany] or [asOne] after a subscriber has already been registered will
+ * deliver an [IllegalStateException] to that subscriber immediately.
  *
  * Uses a [ConcurrentLinkedQueue] and a conflated [Channel] as wakeup signal.
  */
 class UnicastSink<T : Any> {
 
-    private val queue    = ConcurrentLinkedQueue<T>()
-    private val signal   = Channel<Unit>(Channel.CONFLATED)
-    private val terminal = AtomicReference<Signal.Upstream<T>>(null)
+    private val queue      = ConcurrentLinkedQueue<T>()
+    private val signal     = Channel<Unit>(Channel.CONFLATED)
+    private val terminal   = AtomicReference<Signal.Upstream<T>>(null)
+    private val subscribed = AtomicBoolean(false)
 
     /**
      * Queues [value] in an unbounded [java.util.concurrent.ConcurrentLinkedQueue].
@@ -200,6 +201,10 @@ class UnicastSink<T : Any> {
     }
 
     fun asMany(): Many<T> = Many.generate { downstream ->
+        if (!subscribed.compareAndSet(false, true)) {
+            downstream(Signal.Upstream.Error(IllegalStateException("UnicastSink already has a subscriber")))
+            return@generate
+        }
         while (true) {
             var item = queue.poll()
             while (item != null) {

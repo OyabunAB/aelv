@@ -15,14 +15,9 @@
  */
 package se.oyabun.aelv
 
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withTimeout
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.time.Duration.Companion.seconds
 
 class UnicastSinkTest {
 
@@ -49,35 +44,17 @@ class UnicastSinkTest {
     }
 
     @Test
-    fun `each item delivered to exactly one of two competing subscribers`() = runTest {
-        val sink    = Sinks.unicast<Int>()
-        val counter = AtomicInteger(0)
+    fun `second subscriber receives error when unicast already has a subscriber`() {
+        val sink = Sinks.unicast<Int>()
+        (1..4).forEach { sink.emit(it) }
+        sink.complete()
 
-        val job1 = launch {
-            sink.asMany().subscribe(object : org.reactivestreams.Subscriber<Int> {
-                override fun onSubscribe(s: org.reactivestreams.Subscription) { s.request(Long.MAX_VALUE) }
-                override fun onNext(t: Int)     { counter.incrementAndGet() }
-                override fun onError(t: Throwable) {}
-                override fun onComplete()          {}
-            })
-        }
-        val job2 = launch {
-            sink.asMany().subscribe(object : org.reactivestreams.Subscriber<Int> {
-                override fun onSubscribe(s: org.reactivestreams.Subscription) { s.request(Long.MAX_VALUE) }
-                override fun onNext(t: Int)     { counter.incrementAndGet() }
-                override fun onError(t: Throwable) {}
-                override fun onComplete()          {}
-            })
-        }
+        Verify.that(sink.asMany())
+            .emitsNext(1, 2, 3, 4)
+            .completesNormally()
 
-        withTimeout(2.seconds) {
-            (1..4).forEach { sink.emit(it) }
-            sink.complete()
-            job1.join()
-            job2.join()
-        }
-
-        assertEquals(4, counter.get())
+        val thrown = Verify.that(sink.asMany()).completesWithError()
+        assertIs<IllegalStateException>(thrown)
     }
 
     @Test

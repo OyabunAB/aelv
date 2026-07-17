@@ -23,7 +23,7 @@ repositories {
 }
 
 dependencies {
-    implementation("se.oyabun:aelv:1.0.0-rc.1")
+    implementation("se.oyabun:aelv:1.0.0-rc.5")
 }
 ```
 
@@ -239,6 +239,6 @@ Any async operator routes through the full protocol with demand signalling and c
 
 ## Status
 
-Current release: `1.0.0-rc.4`
+Current release: `1.0.0-rc.5`
 
-All operators across `Many`, `One`, `Maybe`, and `None` are implemented and tested. `Maybe<T>` was introduced in rc.4. No breaking changes are planned before `1.0.0`.
+All operators across `Many`, `One`, `Maybe`, and `None` are implemented and tested. `resource` bracket always runs release even on downstream cancel. `Either.success()`/`Either.failure()` companion factories added. `flatMapNone` on all four types. `doOn*` side-effect operators on all types. `subscribeOn`/`publishOn` on `Maybe` and `None`. `UnicastSink` now enforces single-subscriber semantics — a second subscriber receives `IllegalStateException` immediately. Operator files split by type: `ManyOperators.kt`, `OneOperators.kt`, `MaybeOperators.kt`, `NoneOperators.kt`. No breaking changes are planned before `1.0.0`.
