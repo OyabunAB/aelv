@@ -332,7 +332,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                 emit(Signal.Upstream.Error(result.value))
             }
         }
-        emit(Signal.Upstream.Complete)
+        if (!cancelled) emit(Signal.Upstream.Complete)
     }
 }
 

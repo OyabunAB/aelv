@@ -598,6 +598,20 @@ class OperatorsTest {
             Verify.that(Many.empty<Int>().flatMapSequential { Many.items(it) })
                 .completesNormally()
         }
+
+        @Test
+        fun `flatMapSequential does not emit Complete after downstream cancel`() {
+            var completeCount = 0
+            Verify.that(
+                Many.items(1, 2, 3, 4, 5)
+                    .flatMapSequential { Many.items(it) }
+                    .take(2)
+                    .doOnComplete { completeCount++ }
+            )
+                .emitsNext(1, 2)
+                .completesNormally()
+            assertEquals(1, completeCount, "Complete must be signalled exactly once")
+        }
     }
 
     class TakeUntilOther {
