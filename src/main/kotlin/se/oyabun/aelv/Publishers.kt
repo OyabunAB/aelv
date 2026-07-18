@@ -484,7 +484,7 @@ class None<T : Any> private constructor(
             })
 
         fun <T : Any> complete(): None<T> = None(Step.Empty)
-        fun <T : Any> error(cause: Throwable): None<T> = None(Step.Error(cause as? Exception ?: RuntimeException(cause)))
+        fun <T : Any> error(cause: Exception): None<T> = None(Step.Error(cause))
         fun <T : Any> never(): None<T> = None(Step.Never)
 
         fun <T : Any> pipelineFrom(): None<T> = None(Step.PipelineSource())

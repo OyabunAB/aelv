@@ -13,12 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
 @file:OptIn(ExperimentalTypeInference::class)
 package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
-import kotlin.internal.LowPriorityInOverloadResolution
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -32,17 +30,6 @@ import org.reactivestreams.Publisher
 
 private val log = Logging.of<One<*>>()
 
-fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> =
-    One.generate { emit ->
-        source(
-            { value -> emit(Signal.Upstream.Next(transform(value))) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [map] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
     One.generate { emit ->
         source(
@@ -52,24 +39,6 @@ fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
         )
     }
 
-fun <T : Any, R : Any> One<T>.flatMap(transform: (T) -> One<R>): One<R> =
-    One.generate { emit ->
-        source(
-            { value ->
-                transform(value).source(
-                    { inner -> emit(Signal.Upstream.Next(inner)) },
-                    { emit(Signal.Upstream.Complete) },
-                    { issue -> emit(Signal.Upstream.Error(issue)) },
-                )
-                Signal.Downstream.Cancel
-            },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [flatMap] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> =
     One.generate { emit ->
         source(
@@ -92,22 +61,6 @@ fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> 
  * The result type widens from [One] to [Many] because the inner stream can emit zero or more items.
  * If the inner [Many] itself errors, the error propagates and no further items are emitted.
  */
-fun <T : Any, R : Any> One<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
-        source(
-            { value ->
-                val result = transform(value).collect { inner -> emit(Signal.Upstream.Next(inner)) }
-                if (result is Failure) emit(Signal.Upstream.Error(result.value))
-                else emit(Signal.Upstream.Complete)
-                Signal.Downstream.Cancel
-            },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [flatMapMany] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.flatMapMany(transform: suspend (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         source(
@@ -129,17 +82,6 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: suspend (T) -> Many<R>): Ma
  * rather than a [One], reflecting that the downstream may complete empty.
  * If this [One] errors, the error is forwarded without calling [transform].
  */
-fun <T : Any, R : Any> One<T>.flatMapMaybe(transform: (T) -> Maybe<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
-            onComplete,
-            onError,
-        )
-    }
-
-/** Suspend variant of [flatMapMaybe] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.flatMapMaybe(transform: suspend (T) -> Maybe<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -155,13 +97,8 @@ fun <T : Any, R : Any> One<T>.flatMapMaybe(transform: suspend (T) -> Maybe<R>): 
  * The return type is [None] because the entire chain produces no items — only a completion or
  * error signal.  Any error from the inner [None] is rethrown and terminates the outer stream.
  */
-fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<*>): None<T> =
-    flatMap { value -> transform(value).thenReturn(value) }.discard()
-
-/** Suspend variant of [flatMapNone] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any> One<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
-    flatMap(transform = suspend { value: T -> transform(value).thenReturn(value) }).discard()
+    flatMap { value -> transform(value).thenReturn(value) }.discard()
 
 /**
  * Suspends until this [One] emits its value or signals an error.

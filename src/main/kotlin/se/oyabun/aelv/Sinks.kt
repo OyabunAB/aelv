@@ -62,7 +62,11 @@ sealed class Sink<T : Any>(
                 history.addLast(signal)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
-            subscribers.forEach { inbox -> inbox.trySend(signal) }
+            subscribers.forEach { inbox ->
+                val result = inbox.trySend(signal)
+                if (result.isFailure && !result.isClosed)
+                    throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or bufferSize too small")
+            }
         }
     }
 
@@ -81,15 +85,17 @@ sealed class Sink<T : Any>(
         return true
     }
 
-    private fun register(inbox: Channel<Signal.Upstream<T>>): AutoCloseable {
-        lock.withLock { subscribers.add(inbox) }
-        return AutoCloseable { lock.withLock { subscribers.remove(inbox) } }
-    }
+    private fun registerWithHistory(inbox: Channel<Signal.Upstream<T>>): Pair<AutoCloseable, List<Signal.Upstream.Next<T>>> =
+        lock.withLock {
+            subscribers.add(inbox)
+            val snapshot = if (historySize > 0) history.toList() else emptyList()
+            AutoCloseable { lock.withLock { subscribers.remove(inbox) } } to snapshot
+        }
 
     fun asMany(): Many<T> = Many.generate { emit ->
         val inbox = Channel<Signal.Upstream<T>>(bufferSize)
-        register(inbox).using {
-            val replay = lock.withLock { history.toList() }
+        val (handle, replay) = registerWithHistory(inbox)
+        handle.using {
             for (item in replay) {
                 if (emit(item) == Signal.Downstream.Cancel) return@using
             }
@@ -110,8 +116,9 @@ sealed class Sink<T : Any>(
 
     fun asOne(): One<T> = One.generate { emit ->
         val inbox = Channel<Signal.Upstream<T>>(bufferSize)
-        register(inbox).using {
-            for (item in lock.withLock { history.toList() }) {
+        val (handle, history) = registerWithHistory(inbox)
+        handle.using {
+            for (item in history) {
                 emit(item)
                 emit(Signal.Upstream.Complete)
                 return@using

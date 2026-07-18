@@ -13,12 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
 @file:OptIn(ExperimentalTypeInference::class)
 package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
-import kotlin.internal.LowPriorityInOverloadResolution
 import kotlin.time.Duration
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -28,17 +26,6 @@ import org.reactivestreams.Publisher
 
 private val log = Logging.of<Maybe<*>>()
 
-fun <T : Any, R : Any> Maybe<T>.map(transform: (T) -> R): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            { value -> onNext(transform(value)) },
-            onComplete,
-            onError,
-        )
-    }
-
-/** Suspend variant of [map] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -49,17 +36,6 @@ fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
     }
 
 /** Keeps the value if [predicate] returns true, otherwise produces an empty [Maybe]. */
-fun <T : Any> Maybe<T>.filter(predicate: (T) -> Boolean): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            { value -> if (predicate(value)) onNext(value) else { onComplete(); Signal.Downstream.Cancel } },
-            onComplete,
-            onError,
-        )
-    }
-
-/** Suspend variant of [filter]. */
-@LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -69,17 +45,6 @@ fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
         )
     }
 
-fun <T : Any, R : Any> Maybe<T>.flatMap(transform: (T) -> Maybe<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
-            onComplete,
-            onError,
-        )
-    }
-
-/** Suspend variant of [flatMap] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -97,24 +62,6 @@ fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): May
  * distinguish between "Maybe was empty" and "inner Many was empty" at the output level — both
  * yield a [Many] that completes with zero items.
  */
-fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
-        source(
-            { value ->
-                transform(value).source(
-                    { inner -> emit(Signal.Upstream.Next(inner)) },
-                    { emit(Signal.Upstream.Complete) },
-                    { issue -> emit(Signal.Upstream.Error(issue)) },
-                )
-                Signal.Downstream.Cancel
-            },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [flatMapMany] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: suspend (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
         source(
@@ -137,11 +84,6 @@ fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: suspend (T) -> Many<R>): 
  *
  * Useful for fire-and-forget side effects that should be skipped when no value is present.
  */
-fun <T : Any> Maybe<T>.flatMapNone(transform: (T) -> None<*>): None<T> =
-    toMany().flatMapNone(transform)
-
-/** Suspend variant of [flatMapNone] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
     toMany().flatMapNone(transform)
 
@@ -151,23 +93,6 @@ fun <T : Any> Maybe<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
  * If this [Maybe] emits a value, that value is forwarded. If it completes empty,
  * [fallback] is invoked and its result is emitted.
  */
-fun <T : Any> Maybe<T>.or(fallback: () -> T): One<T> =
-    One.generate { emit ->
-        var emitted = false
-        source(
-            { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
-            {
-                if (!emitted) {
-                    emit(Signal.Upstream.Next(fallback()))
-                }
-                emit(Signal.Upstream.Complete)
-            },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [or] — [fallback] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.or(fallback: suspend () -> T): One<T> =
     One.generate { emit ->
         var emitted = false
@@ -189,28 +114,6 @@ fun <T : Any> Maybe<T>.or(fallback: suspend () -> T): One<T> =
  * If this [Maybe] emits a value, that value is forwarded and [fallback] is never subscribed.
  * If it completes empty, [fallback] is subscribed and its items are forwarded.
  */
-fun <T : Any> Maybe<T>.orMany(fallback: () -> Many<T>): Many<T> =
-    Many.generate { emit ->
-        var emitted = false
-        source(
-            { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
-            {
-                if (!emitted) {
-                    fallback().source(
-                        { inner -> emit(Signal.Upstream.Next(inner)) },
-                        { emit(Signal.Upstream.Complete) },
-                        { issue -> emit(Signal.Upstream.Error(issue)) },
-                    )
-                } else {
-                    emit(Signal.Upstream.Complete)
-                }
-            },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [orMany]. */
-@LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.orMany(fallback: suspend () -> Many<T>): Many<T> =
     Many.generate { emit ->
         var emitted = false

@@ -58,17 +58,6 @@ fun <T : Any, R : Any> Many<T>.map(transform: suspend (T) -> R): Many<R> =
  * Applies [transform] to each item and emits the result only when it is non-null.
  * Null results are silently dropped and demand is replenished from upstream.
  */
-fun <T : Any, R : Any> Many<T>.mapNotNull(transform: (T) -> R?): Many<R> =
-    Many.fused { onNext, onComplete, onError ->
-        source(
-            { value -> val result = transform(value); if (result != null) onNext(result) else Signal.Downstream.Request },
-            onComplete,
-            onError,
-        )
-    }
-
-/** Suspend variant of [mapNotNull] — [transform] may call suspend functions. */
-@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.mapNotNull(transform: suspend (T) -> R?): Many<R> =
     Many.fused { onNext, onComplete, onError ->
         source(

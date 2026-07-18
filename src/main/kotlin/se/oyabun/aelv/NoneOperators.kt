@@ -13,12 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
 @file:OptIn(ExperimentalTypeInference::class)
 package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
-import kotlin.internal.LowPriorityInOverloadResolution
 import kotlin.time.Duration
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -36,20 +34,6 @@ private val log = Logging.of<None<*>>()
  * primary way to chain a fire-and-forget step before a value-producing step without nesting.
  */
 @OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: () -> One<R>): One<R> =
-    One.generate { emit ->
-        val result = await()
-        if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
-        producer().source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [then] returning [One]. */
-@LowPriorityInOverloadResolution
-@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
     One.generate { emit ->
         val result = await()
@@ -66,16 +50,6 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
  * completes without error; an error in the [None] is forwarded and [producer] is skipped.
  */
 @OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: () -> Maybe<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
-        val result = await()
-        if (result is Failure) { onError(result.value); return@Maybe }
-        producer().source(onNext, onComplete, onError)
-    }
-
-/** Suspend variant of [then] returning [Maybe]. */
-@LowPriorityInOverloadResolution
-@OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         val result = await()
@@ -88,20 +62,6 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> 
  * completes without error; an error in the [None] terminates the stream without subscribing to
  * [producer].
  */
-@OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: () -> Many<R>): Many<R> =
-    Many.generate { emit ->
-        val result = await()
-        if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
-        producer().source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [then] returning [Many]. */
-@LowPriorityInOverloadResolution
 @OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
     Many.generate { emit ->
@@ -118,16 +78,6 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
  * Sequences two [None]s: awaits this one, then awaits the [None] returned by [producer].
  * Any error from either step is rethrown, short-circuiting the second step if the first fails.
  */
-@OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: () -> None<R>): None<R> =
-    None.generate {
-        val result = await()
-        if (result is Failure) throw result.value
-        producer().await().let { if (it is Failure) throw it.value }
-    }
-
-/** Suspend variant of [then] returning [None]. */
-@LowPriorityInOverloadResolution
 @OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.then(producer: suspend () -> None<R>): None<R> =
     None.generate {
