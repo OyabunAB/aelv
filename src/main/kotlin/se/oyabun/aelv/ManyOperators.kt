@@ -103,14 +103,16 @@ fun <T : Any> Many<T>.take(n: Long): Many<T> {
 
 fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
     Many.fused { onNext, onComplete, onError ->
+        var predicateFailed = false
         source(
             { value ->
                 if (predicate(value)) onNext(value)
-                else { onComplete(); Signal.Downstream.Cancel }
+                else { predicateFailed = true; Signal.Downstream.Cancel }
             },
             onComplete,
             onError,
         )
+        if (predicateFailed) onComplete()
     }
 
 /** Drops the first [n] items then emits the rest.  Requires `n >= 0`. */

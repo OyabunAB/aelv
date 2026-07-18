@@ -120,6 +120,19 @@ class OperatorsTest {
         }
 
         @Test
+        fun `takeWhile signals onComplete exactly once when predicate fails`() {
+            var completions = 0
+            Verify.that(
+                Many.items(1, 2, 3, 4, 5)
+                    .takeWhile { it < 3 }
+                    .doOnComplete { completions++ }
+            )
+                .emitsNext(1, 2)
+                .completesNormally()
+            assertEquals(1, completions, "onComplete must fire exactly once")
+        }
+
+        @Test
         fun `distinct removes duplicates`() {
             Verify.that(Many.items(1, 2, 1, 3, 2).distinct())
                 .emitsNext(1, 2, 3)
