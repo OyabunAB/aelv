@@ -231,16 +231,6 @@ fun <T : Any> Maybe<T>.orMany(fallback: suspend () -> Many<T>): Many<T> =
         )
     }
 
-/** Converts to a [Many] that emits zero or one items. */
-fun <T : Any> Maybe<T>.toMany(): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
 /**
  * Converts to a [One], throwing [NoSuchElementException] if this [Maybe] is empty.
  *

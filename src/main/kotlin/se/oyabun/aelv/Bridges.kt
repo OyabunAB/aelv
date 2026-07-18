@@ -40,30 +40,6 @@ fun <T : Any> Publisher<T>.asOne(): One<T> = One.from(this)
 /** Bridges this Reactive Streams [Publisher] to a [None] by draining all items. */
 fun <T : Any> Publisher<T>.asNone(): None<T> = None.from(this)
 
-/** Lifts this [One] into a [Many] that emits the single value and completes. */
-fun <T : Any> One<T>.toMany(): Many<T> = Many.fused { onNext, onComplete, onError ->
-    source(
-        { value -> onNext(value) },
-        onComplete,
-        onError,
-    )
-}
-
-/** Lifts this [None] into a [Many] that completes immediately with no items. */
-fun <T : Any> None<T>.toMany(): Many<T> = Many.fused { _, onComplete, onError ->
-    val result = await()
-    if (result is Failure) onError(result.value) else onComplete()
-}
-
-/**
- * Lifts this [One] into a [Maybe] that always has a value present.
- *
- * Uses [One.source] directly to preserve the coroutine context of the caller.
- */
-fun <T : Any> One<T>.toMaybe(): Maybe<T> = Maybe { onNext, onComplete, onError ->
-    source(onNext, onComplete, onError)
-}
-
 /**
  * Takes the first item from this [Many] and wraps it in a [Maybe].
  *
