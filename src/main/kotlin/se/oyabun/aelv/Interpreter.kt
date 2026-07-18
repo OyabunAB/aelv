@@ -33,7 +33,7 @@ internal sealed class Step<out T : Any> {
     object Never                                                                                       : Step<Nothing>()
     class FromFlow<T : Any>(val flow: Flow<T>)                                                        : Step<T>()
     class FromPublisher<T : Any>(val publisher: Publisher<T>)                                               : Step<T>()
-    class Defer<T : Any>(val factory: () -> Many<T>)                                                  : Step<T>()
+    class Defer<T : Any>(val factory: () -> Observable<T, *>)                                     : Step<T>()
     class PipelineSource<T : Any>                                                                      : Step<T>()
     /** Escape hatch for async operators (interval, buffer, …). Not stack-safe for recursive use. */
     class Suspend<T : Any>(
@@ -192,13 +192,16 @@ private suspend fun resolve(
         is Step.Never           -> { todo.removeFirst(); awaitCancellation() }
 
         is Step.Defer<*> -> {
-            todo[0] = Work(RunSource.Pending(step.factory().step), currentFrame)
+            val obs = step.factory()
+            val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe -> (obs as Observable<Any, *>).source(on, oc, oe) }
+            todo[0] = Work(RunSource.Pending(nextStep as Step<Any>), currentFrame)
             return
         }
         is Step.PipelineSource<*> -> {
-            val source = currentCoroutineContext()[SourceSlot]?.publisher as? Many<Any>
-                ?: error("Many.pipelineFrom() executed without a bound source — use applyTo() or then()")
-            todo[0] = Work(RunSource.Pending(source.step), currentFrame)
+            val obs = currentCoroutineContext()[SourceSlot]?.publisher as? Observable<*, *>
+                ?: error("pipelineFrom() executed without a bound source — use applyTo() or then()")
+            val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe -> (obs as Observable<Any, *>).source(on, oc, oe) }
+            todo[0] = Work(RunSource.Pending(nextStep as Step<Any>), currentFrame)
             return
         }
 

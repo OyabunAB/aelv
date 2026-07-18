@@ -33,20 +33,28 @@ import org.reactivestreams.Publisher
 sealed interface Source<out T : Any>
 
 /**
- * Internal base for [Many], [One], and [Maybe].
+ * Internal base for [Many], [One], [Maybe], and [None].
  *
- * Provides shared implementations of operators that are identical across all three types.
- * [Self] is the concrete subtype; [wrap] constructs a new [Self] from a triple-callback source.
+ * Stores the computation as a [Step] ADT node and executes it through the heap-allocated
+ * trampoline interpreter, giving all four types O(1) stack depth for arbitrary operator chains.
  *
- * [None] is not an [Observable] — its source carries no items.
+ * [Self] is the concrete subtype. [wrap] constructs a new [Self] from a [Step.Suspend] node,
+ * which is the escape hatch for operators that cannot be expressed as structural [Step] nodes.
  */
 internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
 
-    internal abstract suspend fun source(
+    internal abstract val step: Step<T>
+
+    internal open suspend fun source(
         onNext:     suspend (T) -> Signal.Downstream,
         onComplete: suspend () -> Unit,
         onError:    suspend (Exception) -> Unit,
-    )
+    ) {
+        when (val result = interpret(step, Frame.Collect(onNext))) {
+            is Success -> if (result.value) onComplete()
+            is Failure -> onError(result.value)
+        }
+    }
 
     internal abstract fun wrap(
         block: suspend (
@@ -55,6 +63,13 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
             onError:    suspend (Exception) -> Unit,
         ) -> Unit,
     ): Self
+
+    internal open suspend fun collect(
+        action: suspend (T) -> Signal.Downstream,
+    ): Either<Exception, Unit> = when (val result = interpret(step, Frame.Collect(action))) {
+        is Success -> Unit.right()
+        is Failure -> result.value.left()
+    }
 
     fun doOnNext(action: (T) -> Unit): Self = wrap { onNext, onComplete, onError ->
         source(
@@ -159,10 +174,6 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
         if (result is Failure) onError(result.value) else onComplete()
     }
 
-    /**
-     * Invokes [action] with the attempt number and cause before each retry.
-     * Compose before [retry] to observe retry attempts without shared mutable state.
-     */
     fun doOnRetry(action: (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
         var attempt = 0L
         source(
@@ -182,21 +193,11 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
         )
     }
 
-    /**
-     * Invokes [action] with the number of retries when the source succeeds after at least one failure.
-     * Does not fire on first-attempt success. Compose before [retry].
-     */
     fun doOnRecover(action: (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError ->
         var retries = 0L
         source(
-            { value ->
-                if (retries > 0) guardedSideEffect("doOnRecover", log) { action(retries) }
-                onNext(value)
-            },
-            {
-                if (retries > 0) guardedSideEffect("doOnRecover", log) { action(retries) }
-                onComplete()
-            },
+            { value -> if (retries > 0) guardedSideEffect("doOnRecover", log) { action(retries) }; onNext(value) },
+            { if (retries > 0) guardedSideEffect("doOnRecover", log) { action(retries) }; onComplete() },
             { cause -> retries++; onError(cause) },
         )
     }
@@ -205,14 +206,8 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
     fun doOnRecover(action: suspend (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError ->
         var retries = 0L
         source(
-            { value ->
-                if (retries > 0) guardedSideEffectSuspend("doOnRecover", log) { action(retries) }
-                onNext(value)
-            },
-            {
-                if (retries > 0) guardedSideEffectSuspend("doOnRecover", log) { action(retries) }
-                onComplete()
-            },
+            { value -> if (retries > 0) guardedSideEffectSuspend("doOnRecover", log) { action(retries) }; onNext(value) },
+            { if (retries > 0) guardedSideEffectSuspend("doOnRecover", log) { action(retries) }; onComplete() },
             { cause -> retries++; onError(cause) },
         )
     }

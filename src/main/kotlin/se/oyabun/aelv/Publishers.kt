@@ -50,18 +50,13 @@ internal sealed interface Fusion<out T : Any> {
 /**
  * A cold, backpressure-first publisher of zero or more items of type [T].
  *
- * Internally represented as a [Step] ADT node — a pure description of the
- * computation.  The [Interpreter] evaluates the [Step] tree using a
- * heap-allocated work-deque, so any depth of operator chaining or recursive
- * [flatMap]/[concatMap] definitions runs in O(1) JVM call-stack depth.
- *
- * The [Fusion] fast path is preserved: when the entire chain is fused,
- * [collect] bypasses the interpreter and uses the existing O(1)-allocation
- * `poll()` loop.
+ * The [Step] ADT node is evaluated by the heap-allocated trampoline interpreter,
+ * giving O(1) stack depth for arbitrary operator chains. The [Fusion] fast path
+ * is used when the entire chain is fused, bypassing the interpreter entirely.
  */
 @Suppress("EXPOSED_SUPER_CLASS")
 class Many<T : Any> private constructor(
-    internal val step: Step<T>,
+    override val step: Step<T>,
     internal val fusion: Fusion<T> = Fusion.None,
 ) : Publisher<T>, Observable<T, Many<T>>() {
 
@@ -72,7 +67,7 @@ class Many<T : Any> private constructor(
     ) {
         when (val result = interpret(step, Frame.Collect(onNext))) {
             is Success -> if (result.value) onComplete()
-            is Failure  -> onError(result.value)
+            is Failure -> onError(result.value)
         }
     }
 
@@ -85,7 +80,7 @@ class Many<T : Any> private constructor(
     ): Many<T> = Many.fused(block = block)
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val subscription = StreamSubscription(subscriber) { on, oc, oe -> source(on, oc, oe) }
+        val subscription = StreamSubscription(subscriber, ::source)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
@@ -97,19 +92,12 @@ class Many<T : Any> private constructor(
         )
     }
 
-    /**
-     * Drives the stream, calling [action] for each item.
-     *
-     * Uses the fusion poll loop when the chain is fully fused; falls back to
-     * the interpreter (stack-safe) otherwise.
-     */
-    internal suspend fun collect(
+    override internal suspend fun collect(
         action: suspend (T) -> Signal.Downstream,
     ): Either<Exception, Unit> {
         val currentFusion = fusion
         if (currentFusion is Fusion.Available) {
-            val coroutineContext  = currentCoroutineContext()
-            val poll = currentFusion.create(coroutineContext)
+            val poll = currentFusion.create(currentCoroutineContext())
             if (poll != null) return Either.catching {
                 while (true) {
                     val value = poll.poll() ?: break
@@ -118,8 +106,8 @@ class Many<T : Any> private constructor(
             }
         }
         return when (val result = interpret(step, Frame.Collect(action))) {
-            is Success -> Unit.right()   // both completed and cancelled are "ok" for collect
-            is Failure  -> result.value.left()
+            is Success -> Unit.right()
+            is Failure -> result.value.left()
         }
     }
 
@@ -138,7 +126,6 @@ class Many<T : Any> private constructor(
     }
 
     companion object {
-
 
         fun <T : Any> items(vararg items: T): Many<T> =
             Many(Step.Items(items), ArrayFusion(items))
@@ -165,13 +152,11 @@ class Many<T : Any> private constructor(
 
         fun <T : Any> defer(factory: () -> Many<T>): Many<T> = Many(Step.Defer(factory))
 
-        /** Suspend variant of [defer] — the factory may itself be a suspend function. */
         fun <T : Any> defer(factory: suspend () -> Many<T>): Many<T> =
             fused { onNext, onComplete, onError ->
                 factory().source(onNext, onComplete, onError)
             }
 
-        /** Creates a placeholder source that throws [IllegalStateException] at subscription time if not connected via `applyTo()` or `then()`. */
         fun <T : Any> pipelineFrom(): Many<T> = Many(Step.PipelineSource(), SourceFusion())
 
         fun interval(period: Duration): Many<Long> = fused { onNext, onComplete, _ ->
@@ -183,7 +168,6 @@ class Many<T : Any> private constructor(
             @Suppress("UNREACHABLE_CODE")
             onComplete()
         }
-
 
         internal fun <T : Any> fused(
             fusion: Fusion<T> = Fusion.None,
@@ -253,38 +237,25 @@ class Many<T : Any> private constructor(
                 }
                 val error = outerError.get()
                 when {
-                    cancelled    -> {}
+                    cancelled       -> {}
                     error.isError() -> onError(error.asError())
-                    else          -> onComplete()
+                    else            -> onComplete()
                 }
             }
         }
     }
 }
 
-
 /**
  * A cold publisher of exactly one item of type [T].
  *
- * If the source emits zero items the subscriber receives only `onComplete` without `onNext` — no error.
+ * If the source emits zero items the subscriber receives only `onComplete` without `onNext`.
  * If it emits more than one item, all items after the first are silently consumed.
  */
 @Suppress("EXPOSED_SUPER_CLASS")
 class One<T : Any> private constructor(
-    private val sourceLambda: suspend (
-        onNext: suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError: suspend (Exception) -> Unit,
-    ) -> Unit,
+    override val step: Step<T>,
 ) : Publisher<T>, Observable<T, One<T>>() {
-
-    internal val source get() = sourceLambda
-
-    override suspend fun source(
-        onNext: suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError: suspend (Exception) -> Unit,
-    ) = sourceLambda(onNext, onComplete, onError)
 
     override fun wrap(
         block: suspend (
@@ -292,10 +263,10 @@ class One<T : Any> private constructor(
             onComplete: suspend () -> Unit,
             onError:    suspend (Exception) -> Unit,
         ) -> Unit,
-    ): One<T> = One(block)
+    ): One<T> = One(Step.Suspend(block))
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val subscription = StreamSubscription(subscriber, sourceLambda)
+        val subscription = StreamSubscription(subscriber, ::source)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
@@ -315,29 +286,20 @@ class One<T : Any> private constructor(
         )
     }
 
-    internal suspend fun collect(
-        action: suspend (T) -> Signal.Downstream,
-    ): Either<Exception, Unit> = Either.catching {
-        source(
-            { value -> action(value) },
-            { },
-            ::rethrow,
-        )
-    }
-
     companion object {
-        fun <T : Any> single(value: T): One<T> = One { onNext, onComplete, _ ->
+        fun <T : Any> single(value: T): One<T> = One(Step.Suspend { onNext, onComplete, _ ->
             if (onNext(value) != Signal.Downstream.Cancel) onComplete()
-        }
+        })
 
-        fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> T): One<T> = One { onNext, onComplete, _ ->
-            val value = if (context != null) withContext(currentCoroutineContext() + context) { closure() } else closure()
-            if (onNext(value) != Signal.Downstream.Cancel) onComplete()
-        }
+        fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> T): One<T> =
+            One(Step.Suspend { onNext, onComplete, _ ->
+                val value = if (context != null) withContext(currentCoroutineContext() + context) { closure() } else closure()
+                if (onNext(value) != Signal.Downstream.Cancel) onComplete()
+            })
 
         internal fun <T : Any> generate(
             block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
-        ): One<T> = One { onNext, onComplete, onError ->
+        ): One<T> = One(Step.Suspend { onNext, onComplete, onError ->
             block { signal ->
                 when (signal) {
                     is Signal.Upstream.Next     -> onNext(signal.value)
@@ -345,10 +307,18 @@ class One<T : Any> private constructor(
                     is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
                 }
             }
-        }
+        })
+
+        internal operator fun <T : Any> invoke(
+            block: suspend (
+                onNext:     suspend (T) -> Signal.Downstream,
+                onComplete: suspend () -> Unit,
+                onError:    suspend (Exception) -> Unit,
+            ) -> Unit,
+        ): One<T> = One(Step.Suspend(block))
 
         @Suppress("UNCHECKED_CAST")
-        fun <T : Any> from(publisher: Publisher<T>): One<T> = One { onNext, onComplete, onError ->
+        fun <T : Any> from(publisher: Publisher<T>): One<T> = One(Step.Suspend { onNext, onComplete, onError ->
             when (publisher) {
                 is Many<*> -> (publisher as Many<T>).source(
                     { value -> onNext(value); Signal.Downstream.Cancel },
@@ -358,27 +328,14 @@ class One<T : Any> private constructor(
                 is One<*>  -> (publisher as One<T>).source(onNext, onComplete, onError)
                 else       -> { publisher.asFlow().collectCancelling { value -> onNext(value); false }; onComplete() }
             }
-        }
+        })
 
-        fun <T : Any> error(cause: Exception): One<T> = One { _, _, onError -> onError(cause) }
+        fun <T : Any> error(cause: Exception): One<T> = One(Step.Error(cause))
 
-        fun <T : Any> never(): One<T> = One { _, _, _ -> awaitCancellation() }
+        fun <T : Any> never(): One<T> = One(Step.Never)
 
-        /** Creates a placeholder source that throws [IllegalStateException] at subscription time if not connected via `applyTo()` or `then()`. */
-        fun <T : Any> pipelineFrom(): One<T> = One { onNext, onComplete, onError ->
-            @Suppress("UNCHECKED_CAST")
-            val source = currentCoroutineContext()[SourceSlot]?.publisher as? One<T>
-                ?: error("One.pipelineFrom() executed without a bound source — use applyTo() or then()")
-            source.source(onNext, onComplete, onError)
-        }
+        fun <T : Any> pipelineFrom(): One<T> = One(Step.PipelineSource())
 
-        /**
-         * Bridges a callback-based async operation into a [One].
-         *
-         * The [block] receives `success` and `failure` callbacks — exactly one must be called.
-         * Calling neither causes the subscriber to hang indefinitely.
-         * Calling both is undefined behaviour.
-         */
         fun <T : Any> create(block: (success: (T) -> Unit, failure: (Exception) -> Unit) -> Unit): One<T> =
             One.generate { emit ->
                 val result = suspendCancellableCoroutine<Either<Exception, T>> { continuation ->
@@ -404,27 +361,11 @@ class One<T : Any> private constructor(
  * The contract: [source] calls [onNext] at most once, then calls [onComplete].
  * If no value is available it calls [onComplete] directly without calling [onNext].
  * On error it calls [onError] instead of [onComplete].
- *
- * Use [Maybe.present] to create a present value, [Maybe.empty] for the absent case,
- * and [Maybe.defer] to build one lazily from a suspend block that returns `T?` —
- * a null return means absent.
  */
 @Suppress("EXPOSED_SUPER_CLASS")
 class Maybe<T : Any> internal constructor(
-    private val sourceLambda: suspend (
-        onNext:     suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError:    suspend (Exception) -> Unit,
-    ) -> Unit,
+    override val step: Step<T>,
 ) : Publisher<T>, Observable<T, Maybe<T>>() {
-
-    internal val source get() = sourceLambda
-
-    override suspend fun source(
-        onNext:     suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError:    suspend (Exception) -> Unit,
-    ) = sourceLambda(onNext, onComplete, onError)
 
     override fun wrap(
         block: suspend (
@@ -432,48 +373,26 @@ class Maybe<T : Any> internal constructor(
             onComplete: suspend () -> Unit,
             onError:    suspend (Exception) -> Unit,
         ) -> Unit,
-    ): Maybe<T> = Maybe(block)
+    ): Maybe<T> = Maybe(Step.Suspend(block))
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val subscription = StreamSubscription(subscriber, sourceLambda)
+        val subscription = StreamSubscription(subscriber, ::source)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
-    }
-
-    internal suspend fun collect(
-        action: suspend (T) -> Signal.Downstream,
-    ): Either<Exception, Unit> = Either.catching {
-        source(
-            { value -> action(value) },
-            { },
-            ::rethrow,
-        )
     }
 
     companion object {
 
-        fun <T : Any> present(value: T): Maybe<T> = Maybe { onNext, onComplete, _ ->
+        fun <T : Any> present(value: T): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, _ ->
             if (onNext(value) != Signal.Downstream.Cancel) onComplete()
-        }
+        })
 
-        fun <T : Any> empty(): Maybe<T> = Maybe { _, onComplete, _ ->
-            onComplete()
-        }
+        fun <T : Any> empty(): Maybe<T> = Maybe(Step.Empty)
 
-        fun <T : Any> error(cause: Exception): Maybe<T> = Maybe { _, _, onError ->
-            onError(cause)
-        }
+        fun <T : Any> error(cause: Exception): Maybe<T> = Maybe(Step.Error(cause))
 
-        fun <T : Any> never(): Maybe<T> = Maybe { _, _, _ ->
-            awaitCancellation()
-        }
+        fun <T : Any> never(): Maybe<T> = Maybe(Step.Never)
 
-        /**
-         * Builds a [Maybe] from a suspend block.
-         *
-         * A non-null return value produces a present [Maybe]; a null return means absent.
-         * Exceptions propagate as stream errors.
-         */
-        fun <T : Any> defer(closure: suspend () -> T?): Maybe<T> = Maybe { onNext, onComplete, onError ->
+        fun <T : Any> defer(closure: suspend () -> T?): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
             try {
                 val value = closure()
                 if (value != null) {
@@ -484,18 +403,9 @@ class Maybe<T : Any> internal constructor(
             } catch (exception: Exception) {
                 onError(exception)
             }
-        }
+        })
 
-        /**
-         * Adapts any [Publisher] into a [Maybe] by taking at most its first emitted item.
-         *
-         * If the publisher emits at least one item, that first item is forwarded and the
-         * subscription is immediately cancelled — subsequent items are discarded.  If the publisher
-         * completes without emitting, the [Maybe] is empty.  Errors are forwarded as [Maybe] errors.
-         *
-         * This is the bridge used by [Many.firstMaybe] and [One.toMaybe].
-         */
-        fun <T : Any> from(publisher: Publisher<T>): Maybe<T> = Maybe { onNext, onComplete, onError ->
+        fun <T : Any> from(publisher: Publisher<T>): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
             var emitted = false
             try {
                 publisher.asFlow().collectCancelling { value ->
@@ -510,11 +420,11 @@ class Maybe<T : Any> internal constructor(
             } catch (exception: Exception) {
                 onError(exception)
             }
-        }
+        })
 
         internal fun <T : Any> generate(
             block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
-        ): Maybe<T> = Maybe { onNext, onComplete, onError ->
+        ): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
             block { signal ->
                 when (signal) {
                     is Signal.Upstream.Next     -> onNext(signal.value)
@@ -522,7 +432,15 @@ class Maybe<T : Any> internal constructor(
                     is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
                 }
             }
-        }
+        })
+
+        internal operator fun <T : Any> invoke(
+            block: suspend (
+                onNext:     suspend (T) -> Signal.Downstream,
+                onComplete: suspend () -> Unit,
+                onError:    suspend (Exception) -> Unit,
+            ) -> Unit,
+        ): Maybe<T> = Maybe(Step.Suspend(block))
     }
 }
 
@@ -534,17 +452,8 @@ class Maybe<T : Any> internal constructor(
  */
 @Suppress("EXPOSED_SUPER_CLASS")
 class None<T : Any> private constructor(
-    private val noneSource: suspend () -> Unit,
+    override val step: Step<T>,
 ) : Publisher<Nothing>, Observable<T, None<T>>() {
-
-    override suspend fun source(
-        onNext:     suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError:    suspend (Exception) -> Unit,
-    ) = when (val result = await()) {
-        is Success -> onComplete()
-        is Failure -> onError(result.value)
-    }
 
     override fun wrap(
         block: suspend (
@@ -552,38 +461,48 @@ class None<T : Any> private constructor(
             onComplete: suspend () -> Unit,
             onError:    suspend (Exception) -> Unit,
         ) -> Unit,
-    ): None<T> = None { block({ Signal.Downstream.Request }, {}, { throw it }) }
+    ): None<T> = None(Step.Suspend(block))
 
     override fun subscribe(subscriber: Subscriber<in Nothing>) {
-        val subscription = CompletionSubscription(subscriber, noneSource)
+        val subscription = CompletionSubscription(subscriber) {
+            val result = await()
+            if (result is Failure) throw result.value
+        }
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
-    suspend fun await(): Either<Exception, Unit> = Either.catching { noneSource() }
-
     companion object {
-        fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> Unit): None<T> = None {
-            if (context != null) withContext(context) { closure() } else closure()
-        }
+        fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> Unit): None<T> =
+            None(Step.Suspend { _, onComplete, onError ->
+                try {
+                    if (context != null) withContext(currentCoroutineContext() + context) { closure() } else closure()
+                    onComplete()
+                } catch (e: Exception) {
+                    onError(e)
+                }
+            })
 
-        internal fun <T : Any> generate(closure: suspend () -> Unit): None<T> = None(closure)
+        internal fun <T : Any> generate(closure: suspend () -> Unit): None<T> =
+            None(Step.Suspend { _, onComplete, onError ->
+                try { closure(); onComplete() } catch (e: Exception) { onError(e) }
+            })
 
-        fun <T : Any> from(publisher: Publisher<T>): None<T> = None {
-            publisher.asFlow().collect { }
-        }
+        fun <T : Any> from(publisher: Publisher<T>): None<T> =
+            None(Step.Suspend { _, onComplete, onError ->
+                try { publisher.asFlow().collect { }; onComplete() } catch (e: Exception) { onError(e) }
+            })
 
-        fun <T : Any> complete(): None<T> = None { }
-        fun <T : Any> error(cause: Throwable): None<T> = None { throw cause }
-        fun <T : Any> never(): None<T> = None { awaitCancellation() }
+        fun <T : Any> complete(): None<T> = None(Step.Empty)
+        fun <T : Any> error(cause: Throwable): None<T> = None(Step.Error(cause as? Exception ?: RuntimeException(cause)))
+        fun <T : Any> never(): None<T> = None(Step.Never)
 
-        fun <T : Any> pipelineFrom(): None<T> = None.generate {
-            @Suppress("UNCHECKED_CAST")
-            val source = currentCoroutineContext()[SourceSlot]?.publisher as? None<T>
-                ?: error("None.pipelineFrom() executed without a bound source — use applyTo() or then()")
-            val result = source.await()
-            if (result is Failure) throw result.value
-        }
+        fun <T : Any> pipelineFrom(): None<T> = None(Step.PipelineSource())
+
+        internal operator fun <T : Any> invoke(closure: suspend () -> Unit): None<T> =
+            generate(closure)
     }
+
+    suspend fun await(): Either<Exception, Unit> = collect { Signal.Downstream.Request }
 }
 
 
