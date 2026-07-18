@@ -165,6 +165,7 @@ internal class CompletionSubscription(
 
     private val subscribeGate = Channel<Unit>(Channel.CONFLATED)
     private val terminated    = AtomicBoolean(false)
+    private val started       = AtomicBoolean(false)
     private val producer      = AtomicReference(noopJob)
 
     internal fun onSubscribeComplete() {
@@ -200,7 +201,7 @@ internal class CompletionSubscription(
             return
         }
         log.subscription.requested(name, n)
-        start()
+        if (started.compareAndSet(false, true)) start()
     }
 
     override fun cancel() {

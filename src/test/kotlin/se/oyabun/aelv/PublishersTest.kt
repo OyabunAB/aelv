@@ -183,5 +183,12 @@ class PublishersTest {
         fun `from publisher drains and completes`() = runTest {
             assertIs<Success<Unit>>(None.from(Many.items(1, 2, 3)).await())
         }
+        @Test
+        fun `source executes exactly once on multiple request calls`() {
+            Verify.that(None.complete<Int>().thenReturn(42))
+                .assertNext { assertEquals(42, it) }
+                .completesNormally()
+        }
     }
 }
+
