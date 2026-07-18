@@ -50,12 +50,14 @@ fun <T : Any> Many<T>.subscribe(
 ): Disposable {
     require(prefetch > 0) { "prefetch must be positive, got $prefetch" }
     var subscription: SubscriptionState = SubscriptionState.Unbound
+    var cancelled = false
     this.subscribe(object : org.reactivestreams.Subscriber<T> {
         private var consumed = 0L
         private val threshold = (prefetch / 2).coerceAtLeast(1L)
 
         override fun onSubscribe(s: Subscription) {
             subscription = SubscriptionState.Bound(s)
+            if (cancelled) { s.cancel(); return }
             s.request(prefetch)
         }
         override fun onNext(t: T) {
@@ -80,7 +82,7 @@ fun <T : Any> Many<T>.subscribe(
     return object : Disposable {
         override fun cancel() = when (val state = subscription) {
             is SubscriptionState.Bound   -> state.subscription.cancel()
-            is SubscriptionState.Unbound -> Unit
+            is SubscriptionState.Unbound -> { cancelled = true }
         }
     }
 }

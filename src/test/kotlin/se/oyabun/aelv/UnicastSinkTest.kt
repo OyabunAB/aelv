@@ -53,8 +53,7 @@ class UnicastSinkTest {
             .emitsNext(1, 2, 3, 4)
             .completesNormally()
 
-        val thrown = Verify.that(sink.asMany()).completesWithError()
-        assertIs<IllegalStateException>(thrown)
+        Verify.that(sink.asMany()).failedWith<IllegalStateException>()
     }
 
     @Test
@@ -74,9 +73,9 @@ class UnicastSinkTest {
         val cause = RuntimeException("boom")
         sink.error(cause)
 
-        val thrown = Verify.that(sink.asMany()).completesWithError()
-        assertIs<RuntimeException>(thrown)
-        assertEquals("boom", thrown.message)
+        Verify.that(sink.asMany()).failedWith<RuntimeException> {
+            assertEquals("boom", it.message)
+        }
     }
 
     @Test
@@ -113,6 +112,6 @@ class UnicastSinkTest {
         sink.error(RuntimeException("oops"))
         sink.emit(99)
 
-        Verify.that(sink.asMany()).completesWithError()
+        Verify.that(sink.asMany()).failed()
     }
 }

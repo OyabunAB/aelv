@@ -51,7 +51,7 @@ class SinksTest {
             val trigger = Many.defer<Int>(factory = suspend { sink.error(RuntimeException("boom")); Many.empty() })
                 .delaySubscription(1.milliseconds)
             Verify.that(sink.asMany().mergeWith(trigger))
-                .completesWithError(within = 5.seconds)
+                .failed(within = 5.seconds)
         }
 
         @Test fun `complete propagates to all subscribers`() {
@@ -100,8 +100,9 @@ class SinksTest {
         @Test fun `error replayed to late subscriber`() {
             val sink = Sinks.replay<Int>()
             sink.error(RuntimeException("fail"))
-            val error = Verify.that(sink.asMany()).completesWithError(within = 1.seconds)
-            assertEquals("fail", error.message)
+            Verify.that(sink.asMany()).failedWith<RuntimeException>(within = 1.seconds) {
+                assertEquals("fail", it.message)
+            }
         }
     }
 
@@ -168,7 +169,7 @@ class SinksTest {
             val emitter = Many.defer<Int>(factory = suspend { sink.error(RuntimeException("fail")); Many.empty() })
                 .delaySubscription(1.milliseconds)
             Verify.that(sink.asMany().mergeWith(emitter))
-                .completesWithError(within = 5.seconds)
+                .failed(within = 5.seconds)
         }
 
         @Test fun `complete signals onComplete to subscriber`() {

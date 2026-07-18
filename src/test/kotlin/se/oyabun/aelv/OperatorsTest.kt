@@ -46,7 +46,7 @@ class OperatorsTest {
         fun `map propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).map { it * 2 })
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -60,7 +60,7 @@ class OperatorsTest {
         fun `filter propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).filter { it % 2 == 0 })
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -80,7 +80,7 @@ class OperatorsTest {
         fun `mapNotNull propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).mapNotNull { it * 2 })
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -287,7 +287,7 @@ class OperatorsTest {
         fun `retry exhausts and propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(times = 2))
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -308,7 +308,7 @@ class OperatorsTest {
         fun `retry with Retry max exhausts and propagates`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(Policy.retry().maxAttempts(2)))
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -343,7 +343,7 @@ class OperatorsTest {
         fun `retry filter skips non-matching errors`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(Policy.retry().on(NoSuchElementException::class).maxAttempts(5)))
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -353,7 +353,7 @@ class OperatorsTest {
                 attempts++
                 throw InvalidDemandException(-1)
             }.retry(Policy.retry().maxAttempts(0)))
-                .completesWithError()
+                .failed()
             assertEquals(1, attempts)
         }
     }
@@ -371,7 +371,7 @@ class OperatorsTest {
         fun `fold propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).fold(0) { acc, item -> acc + item })
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -580,7 +580,7 @@ class OperatorsTest {
         fun `switchMap propagates source error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).switchMap { Many.items(it) })
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -660,7 +660,7 @@ class OperatorsTest {
         fun `delaySubscription propagates trigger error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.items(1, 2).delaySubscription(Many.error<Unit>(cause)))
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -710,7 +710,7 @@ class OperatorsTest {
         fun `onBackpressureDrop propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).onBackpressureDrop())
-                .completesWithError()
+                .failed()
         }
     }
 
@@ -756,7 +756,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             var terminal: Signal.Terminal? = null
             Verify.that(Many.error<Int>(cause).doFinally { terminal = it })
-                .completesWithError()
+                .failed()
             assertIs<Signal.Upstream.Error>(terminal)
         }
 
@@ -832,14 +832,14 @@ class OperatorsTest {
         fun `zip propagates error from first source`() {
             val cause = InvalidDemandException(-1)
             Verify.that(zip(One.error<Int>(cause), One.single("a")) { n, s -> "$n$s" })
-                .completesWithError()
+                .failed()
         }
 
         @Test
         fun `zip propagates error from second source`() {
             val cause = InvalidDemandException(-1)
             Verify.that(zip(One.single(1), One.error<String>(cause)) { n, s -> "$n$s" })
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -863,7 +863,7 @@ class OperatorsTest {
         fun `flatMapNone propagates error from One`() {
             val cause = InvalidDemandException(-1)
             Verify.that(One.error<Int>(cause).flatMapNone { None.complete<Unit>() })
-                .completesWithError()
+                .failed()
         }
     }
 
@@ -918,14 +918,14 @@ class OperatorsTest {
         @Test
         fun `reduce on empty returns NoSuchElementException`() {
             Verify.that(Many.empty<Int>().reduce { a, b -> a + b })
-                .completesWithError()
+                .failed()
         }
 
         @Test
         fun `reduce propagates source error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).reduce { a, b -> a + b })
-                .completesWithError()
+                .failed()
         }
     }
 
@@ -1028,7 +1028,7 @@ class OperatorsTest {
             val sink  = Sinks.broadcast<Int>()
             sink.error(cause)
 
-            Verify.that(sink.asMany()).completesWithError()
+            Verify.that(sink.asMany()).failed()
         }
 
         @Test
@@ -1071,7 +1071,7 @@ class OperatorsTest {
         fun `Maybe retry exhausts and propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Maybe.error<Int>(cause).retry(times = 2))
-                .completesWithError()
+                .failed()
         }
 
         @Test
@@ -1104,7 +1104,20 @@ class OperatorsTest {
         fun `None retry exhausts and propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(None.error<Unit>(cause).retry(times = 2))
-                .completesWithError()
+                .failed()
+        }
+    }
+
+    class CancelSemantics {
+
+        @Test
+        fun `take 0 aborts upstream`() {
+            Verify.that(Many.items(1, 2, 3)).aborted()
+        }
+
+        @Test
+        fun `normal completion`() {
+            Verify.that(Many.items(1, 2, 3)).completed()
         }
     }
 }

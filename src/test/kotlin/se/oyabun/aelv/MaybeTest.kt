@@ -37,9 +37,8 @@ class MaybeTest {
         }
 
         @Test fun `error propagates`() {
-            val error = Verify.that(Maybe.error<Int>(RuntimeException("boom")))
-                .completesWithError()
-            assertEquals("boom", error.message)
+            Verify.that(Maybe.error<Int>(RuntimeException("boom")))
+                .failedWith<RuntimeException> { assertEquals("boom", it.message) }
         }
 
         @Test fun `defer with non-null result produces present`() {
@@ -53,9 +52,8 @@ class MaybeTest {
         }
 
         @Test fun `defer with exception propagates as error`() {
-            val error = Verify.that(Maybe.defer<Int> { throw RuntimeException("fail") })
-                .completesWithError()
-            assertEquals("fail", error.message)
+            Verify.that(Maybe.defer<Int> { throw RuntimeException("fail") })
+                .failedWith<RuntimeException> { assertEquals("fail", it.message) }
         }
 
         @Test fun `One toMaybe produces present`() {
@@ -208,9 +206,7 @@ class MaybeTest {
         }
 
         @Test fun `toOne on empty throws NoSuchElementException`() {
-            assertIs<NoSuchElementException>(
-                Verify.that(Maybe.empty<Int>().toOne()).completesWithError()
-            )
+            Verify.that(Maybe.empty<Int>().toOne()).failedWith<NoSuchElementException>()
         }
     }
 

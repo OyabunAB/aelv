@@ -22,27 +22,9 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-/**
- * Pipeline-based verifier for aelv publishers.
- *
- * Each step returns a new [Verify] wrapping a transformed pipeline.
- * Terminal methods subscribe through the original publisher type so that
- * missing terminal signals (e.g. a [Maybe] that never calls onComplete) are
- * detected rather than masked by type conversions.
- *
- * ```kotlin
- * Verify.that(pipeline)
- *     .assertNext { assertEquals(1, it) }
- *     .completesNormally(within = 100.milliseconds)
- * ```
- */
 class Verify<T : Any> private constructor(
     private val pipeline: Many<T>,
     private val context:  CoroutineContext = EmptyCoroutineContext,
-    // Executes the terminal subscription and returns a One<Unit> that resolves
-    // on completion or fails with the stream error.  Defaults to the Many pipeline;
-    // overridden for One/Maybe/None so their terminal signals are tested on the
-    // source type directly rather than through a type-conversion wrapper.
     private val terminal: (Many<T>) -> One<Unit> = { many ->
         many.discard().thenReturn(Unit)
     },
@@ -82,6 +64,45 @@ class Verify<T : Any> private constructor(
 
     fun thenCancels(): Verify<T> = Verify(pipeline.take(0), context, terminal)
 
+    private fun terminatesWith(expected: Signal.Terminal, within: Duration) {
+        var signal: Signal.Terminal? = null
+        val observed = pipeline.doFinally { signal = it }.let {
+            if (expected is Signal.Downstream.Cancel) it.take(0) else it
+        }
+        val result = runBlocking(context + CoroutineName("verify")) {
+            terminal(Verify(observed, context, terminal).pipeline).await(within)
+        }
+        when (expected) {
+            is Signal.Upstream.Error   -> check(result is Failure) { "expected error but stream completed normally" }
+            else                       -> check(result is Success) { "expected normal completion but got error: ${(result as Failure).value.message}" }
+        }
+        check(signal == expected) { "expected terminal $expected but got: $signal" }
+    }
+
+    fun completed(within: Duration = DEFAULT_TIMEOUT) = terminatesWith(Signal.completed, within)
+    fun aborted(within: Duration = DEFAULT_TIMEOUT)   = terminatesWith(Signal.cancelled, within)
+
+    fun failed(within: Duration = DEFAULT_TIMEOUT) {
+        val result = runBlocking(context + CoroutineName("verify")) {
+            terminal(pipeline).await(within)
+        }
+        if (result is Success) throw AssertionError("expected error but stream completed normally")
+    }
+
+    inline fun <reified X : Exception> failedWith(within: Duration = DEFAULT_TIMEOUT, noinline assertions: (X) -> Unit = {}) =
+        failedWith(X::class.java, within, assertions)
+
+    @Suppress("UNCHECKED_CAST")
+    fun <X : Exception> failedWith(type: Class<X>, within: Duration = DEFAULT_TIMEOUT, assertions: (X) -> Unit = {}) {
+        val result = runBlocking(context + CoroutineName("verify")) {
+            terminal(pipeline).await(within)
+        }
+        if (result is Success) throw AssertionError("expected error but stream completed normally")
+        val cause = (result as Failure).value
+        if (!type.isInstance(cause)) throw AssertionError("expected ${type.simpleName} but got ${cause::class.simpleName}: ${cause.message}")
+        assertions(type.cast(cause))
+    }
+
     fun completesEmpty(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
         pipeline
             .flatMapNone { value: T -> None.error<T>(IllegalStateException("expected empty but got: $value")) }
@@ -97,13 +118,6 @@ class Verify<T : Any> private constructor(
         terminal(pipeline).await(within).fold(
             onLeft  = { throw AssertionError("expected normal completion but got error: ${it.message}", it) },
             onRight = { },
-        )
-    }
-
-    fun completesWithError(within: Duration = DEFAULT_TIMEOUT): Exception = runBlocking(context + CoroutineName("verify")) {
-        terminal(pipeline).await(within).fold(
-            onLeft  = { it },
-            onRight = { throw AssertionError("expected error but stream completed normally") },
         )
     }
 
@@ -133,9 +147,6 @@ class Verify<T : Any> private constructor(
             pipeline = maybe.toMany(),
             context  = context,
             terminal = { pipeline ->
-                // Step 1: run intermediate pipeline assertions via the Many pipeline.
-                // Step 2: re-subscribe to the Maybe directly to verify its terminal signal.
-                // Cold sources produce fresh state on each subscription, so this is correct.
                 One.generate { emit ->
                     val assertResult = pipeline.discard().thenReturn(Unit).await()
                     if (assertResult is Failure) { emit(Signal.Upstream.Error(assertResult.value)); emit(Signal.Upstream.Complete); return@generate }

@@ -54,4 +54,10 @@ sealed interface Signal {
 
     /** Supertype of [Upstream.Complete], [Upstream.Error], and [Downstream.Cancel]. */
     sealed interface Terminal : Signal
+
+    companion object {
+        val cancelled: Terminal = Downstream.Cancel
+        val completed: Terminal = Upstream.Complete
+        fun error(cause: Exception): Terminal = Upstream.Error(cause)
+    }
 }

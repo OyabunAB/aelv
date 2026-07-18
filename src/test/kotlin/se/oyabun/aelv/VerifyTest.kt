@@ -113,14 +113,14 @@ class VerifyTest {
 
         @Test fun `returns the error`() {
             val cause = RuntimeException("fail")
-            val error = Verify.that(Many.error<Int>(cause)).completesWithError()
-            assertIs<RuntimeException>(error)
-            assertEquals("fail", error.message)
+            Verify.that(Many.error<Int>(cause)).failedWith<RuntimeException> {
+                assertEquals("fail", it.message)
+            }
         }
 
         @Test fun `fails when stream completes normally`() {
             assertFailsWith<AssertionError> {
-                Verify.that(Many.empty<Int>()).completesWithError()
+                Verify.that(Many.empty<Int>()).failed()
             }
         }
     }
