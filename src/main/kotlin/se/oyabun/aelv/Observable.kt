@@ -143,6 +143,15 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
         )
     }
 
+    fun recover(fallback: (Exception) -> Self): Self = wrap { onNext, onComplete, onError ->
+        source(onNext, onComplete, { issue -> fallback(issue).source(onNext, onComplete, onError) })
+    }
+
+    @LowPriorityInOverloadResolution
+    fun recover(fallback: suspend (Exception) -> Self): Self = wrap { onNext, onComplete, onError ->
+        source(onNext, onComplete, { issue -> fallback(issue).source(onNext, onComplete, onError) })
+    }
+
     fun retry(times: Long = Long.MAX_VALUE): Self = retry(Policy.retry().maxAttempts(times))
 
     fun retry(policy: Policy.Retry): Self = wrap { onNext, onComplete, onError ->

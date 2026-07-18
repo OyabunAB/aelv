@@ -666,34 +666,6 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
     }
 
 /**
- * On error, switches to the [Many] returned by [fallback], continuing from there.
- * On normal completion, [fallback] is not invoked.
- */
-fun <T : Any> Many<T>.recover(fallback: (Exception) -> Many<T>): Many<T> =
-    Many.generate { emit ->
-        val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Failure) fallback(result.value).source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-        else emit(Signal.Upstream.Complete)
-    }
-
-/** Suspend variant of [recover] — [fallback] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.recover(fallback: suspend (Exception) -> Many<T>): Many<T> =
-    Many.generate { emit ->
-        val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Failure) fallback(result.value).source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-        else emit(Signal.Upstream.Complete)
-    }
-
-/**
  * On error, emits the single value returned by [fallback] and then completes.
  * On normal completion, [fallback] is not invoked.
  */

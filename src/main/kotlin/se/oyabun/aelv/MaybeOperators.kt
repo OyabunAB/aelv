@@ -253,26 +253,6 @@ fun <T : Any> Maybe<T>.toOne(): One<T> =
         result ?: throw NoSuchElementException()
     }
 
-fun <T : Any> Maybe<T>.recover(fallback: (Exception) -> Maybe<T>): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            onNext,
-            onComplete,
-            { issue -> fallback(issue).source(onNext, onComplete, onError) },
-        )
-    }
-
-/** Suspend variant of [recover]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Maybe<T>.recover(fallback: suspend (Exception) -> Maybe<T>): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            onNext,
-            onComplete,
-            { issue -> fallback(issue).source(onNext, onComplete, onError) },
-        )
-    }
-
 suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> = Either.catching {
     var result: T? = null
     source(

@@ -28,21 +28,6 @@ import org.reactivestreams.Publisher
 
 private val log = Logging.of<None<*>>()
 
-/** Recovers from an error by substituting a fallback [None] pipeline. */
-fun <T : Any> None<T>.recover(fallback: (Exception) -> None<T>): None<T> =
-    None.generate {
-        val result = await()
-        if (result is Failure) fallback(result.value).await().let { if (it is Failure) throw it.value }
-    }
-
-/** Suspend variant of [recover][None.recover]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> None<T>.recover(fallback: suspend (Exception) -> None<T>): None<T> =
-    None.generate {
-        val result = await()
-        if (result is Failure) fallback(result.value).await().let { if (it is Failure) throw it.value }
-    }
-
 /**
  * Sequences this [None] with a [One] producer: awaits completion of the [None], then subscribes
  * to the [One] returned by [producer].

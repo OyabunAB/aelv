@@ -422,7 +422,7 @@ class OperatorsTest {
 
         @Test
         fun `recover replaces error with fallback value`() {
-            Verify.that(One.error<Int>(InvalidDemandException(-1)).recover { 99 })
+            Verify.that(One.error<Int>(InvalidDemandException(-1)).recover { One.single(99) })
                 .emitsNext(99)
                 .completesNormally()
         }
@@ -794,7 +794,7 @@ class OperatorsTest {
         @Test
         fun `zip completes empty when first source is empty`() = runTest {
             val result = zip(
-                One.defer<Int> { throw NoSuchElementException() }.recover { 0 }
+                One.defer<Int> { throw NoSuchElementException() }.recover { One.single(0) }
                     .flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } },
                 One.single("a")
             ) { n, s -> "$n$s" }.await()

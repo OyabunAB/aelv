@@ -163,27 +163,6 @@ fun <T : Any> One<T>.flatMapNone(transform: (T) -> None<*>): None<T> =
 fun <T : Any> One<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
     flatMap(transform = suspend { value: T -> transform(value).thenReturn(value) }).discard()
 
-/** On error, emits the value returned by [fallback] and completes normally. */
-fun <T : Any> One<T>.recover(fallback: (Exception) -> T): One<T> =
-    One.generate { emit ->
-        val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Failure) {
-            if (emit(Signal.Upstream.Next(fallback(result.value))) == Signal.Downstream.Cancel) return@generate
-        }
-        emit(Signal.Upstream.Complete)
-    }
-
-/** Suspend variant of [recover] — [fallback] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> One<T>.recover(fallback: suspend (Exception) -> T): One<T> =
-    One.generate { emit ->
-        val result = collect { emit(Signal.Upstream.Next(it)) }
-        if (result is Failure) {
-            if (emit(Signal.Upstream.Next(fallback(result.value))) == Signal.Downstream.Cancel) return@generate
-        }
-        emit(Signal.Upstream.Complete)
-    }
-
 /**
  * Suspends until this [One] emits its value or signals an error.
  *
