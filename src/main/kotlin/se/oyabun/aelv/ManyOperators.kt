@@ -709,26 +709,6 @@ fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
         }
     }
 
-/**
- * Re-subscribes to the source on error, up to [times] times.  Defaults to unbounded retries.
- *
- * The source is re-subscribed from scratch on each retry — stateful sources reset.
- * There is no "resume from where it left off" semantics.
- */
-fun <T : Any> Many<T>.retry(times: Long = Long.MAX_VALUE): Many<T> =
-    retry(Policy.retry().maxAttempts(times))
-
-/**
- * Re-subscribes to the source on error according to [policy].
- * The policy controls the error filter, maximum attempt count, and backoff strategy.
- */
-fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
-    Many.generate { emit ->
-        val result = retryLoop(policy, log) { collect { emit(Signal.Upstream.Next(it)) } }
-        if (result is Failure) emit(Signal.Upstream.Error(result.value))
-        else emit(Signal.Upstream.Complete)
-    }
-
 fun <T : Any> Many<T>.concatWith(other: Many<T>): Many<T> = concat(this, other)
 
 fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<*>): None<T> =

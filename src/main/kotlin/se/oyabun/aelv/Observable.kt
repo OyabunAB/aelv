@@ -150,6 +150,64 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
         if (result is Failure) onError(result.value) else onComplete()
     }
 
+    /**
+     * Invokes [action] with the attempt number and cause before each retry.
+     * Compose before [retry] to observe retry attempts without shared mutable state.
+     */
+    fun doOnRetry(action: (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
+        var attempt = 0L
+        source(
+            onNext,
+            onComplete,
+            { cause -> guardedSideEffect("doOnRetry", log) { action(attempt++, cause) }; onError(cause) },
+        )
+    }
+
+    @LowPriorityInOverloadResolution
+    fun doOnRetry(action: suspend (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
+        var attempt = 0L
+        source(
+            onNext,
+            onComplete,
+            { cause -> guardedSideEffectSuspend("doOnRetry", log) { action(attempt++, cause) }; onError(cause) },
+        )
+    }
+
+    /**
+     * Invokes [action] with the number of retries when the source succeeds after at least one failure.
+     * Does not fire on first-attempt success. Compose before [retry].
+     */
+    fun doOnRecover(action: (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError ->
+        var retries = 0L
+        source(
+            { value ->
+                if (retries > 0) guardedSideEffect("doOnRecover", log) { action(retries) }
+                onNext(value)
+            },
+            {
+                if (retries > 0) guardedSideEffect("doOnRecover", log) { action(retries) }
+                onComplete()
+            },
+            { cause -> retries++; onError(cause) },
+        )
+    }
+
+    @LowPriorityInOverloadResolution
+    fun doOnRecover(action: suspend (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError ->
+        var retries = 0L
+        source(
+            { value ->
+                if (retries > 0) guardedSideEffectSuspend("doOnRecover", log) { action(retries) }
+                onNext(value)
+            },
+            {
+                if (retries > 0) guardedSideEffectSuspend("doOnRecover", log) { action(retries) }
+                onComplete()
+            },
+            { cause -> retries++; onError(cause) },
+        )
+    }
+
     fun publishOn(context: CoroutineContext): Self = wrap { onNext, onComplete, onError ->
         source(
             { value -> withContext(currentCoroutineContext() + context) { onNext(value) } },
