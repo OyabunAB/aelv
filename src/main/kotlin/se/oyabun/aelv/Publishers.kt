@@ -326,9 +326,15 @@ class One<T : Any> private constructor(
         fun <T : Any> create(block: (success: (T) -> Unit, failure: (Exception) -> Unit) -> Unit): One<T> =
             One.generate { emit ->
                 val result = suspendCancellableCoroutine<Either<Exception, T>> { continuation ->
+                    var emitted = false
+                    fun emit(value: Either<Exception, T>) {
+                        check(!emitted) { "One.create: callback called more than once" }
+                        emitted = true
+                        continuation.resume(value)
+                    }
                     block(
-                        { value -> continuation.resume(value.right()) },
-                        { cause -> continuation.resume(cause.left()) },
+                        { value -> emit(value.right()) },
+                        { cause -> emit(cause.left()) },
                     )
                 }
                 when (result) {

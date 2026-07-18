@@ -209,15 +209,11 @@ class PipelinesTest {
     class NonePipedFrom {
 
         @Test
-        fun `None pipelineFrom resolves when driven via Many then None`() = runTest {
-            val pipeline: None<Int> = Many.pipelineFrom<Int>()
-                .then(Many.pipelineFrom<Int>().toList())   // One<List<Int>>
-                .then(One.pipelineFrom<List<Int>>().map { it.sum() })  // One<Int>
-                .then(One.pipelineFrom<Int>().map { it })  // One<Int> identity — verifies One.then
-                .let { _ -> None.pipelineFrom<Int>() }     // not really driven, just compile check
-            assertTrue(pipeline is None<*>)
+        fun `None pipelineFrom resolves when driven via Many source`() {
+            val source   = Many.items(1, 2, 3)
+            val pipeline = Many.pipelineFrom<Int>().discard()
+            Verify.that(source.applyTo(pipeline)).completesNormally()
         }
-
     }
 
     // ── connectSource fusion ─────────────────────────────────────────────────
@@ -253,11 +249,9 @@ class PipelinesTest {
         }
 
         @Test
-        fun `connectSource with non-fusible source returns null`() {
-            val pipeline: Many<Int> = Many.pipelineFrom<Int>().map { it * 2 }
-            val pf = pipeline.fusion
-            assertIs<Fusion.Available<*>>(pf)
-            assertIs<Fusion.None>(Many.never<Int>().fusion)
+        fun `non-fusible operator in pipeline results in Fusion None`() {
+            val pipeline = Many.pipelineFrom<Int>().doOnNext { }
+            assertIs<Fusion.None>(pipeline.fusion)
         }
 
         @Test

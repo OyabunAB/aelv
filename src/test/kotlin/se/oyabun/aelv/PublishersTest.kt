@@ -150,10 +150,11 @@ class PublishersTest {
         }
 
         @Test
-        fun `create only uses first callback invocation`() = runTest {
-            val result = One.create<Int> { success, _ -> success(1) }.await()
-            assertIs<Success<Int>>(result)
-            assertEquals(1, result.value)
+        fun `create propagates failure callback as stream error`() {
+            Verify.that(One.create<Int> { _, failure ->
+                failure(RuntimeException("expected error"))
+            })
+                .failedWith<RuntimeException> { assertEquals("expected error", it.message) }
         }
     }
 
@@ -184,7 +185,7 @@ class PublishersTest {
             assertIs<Success<Unit>>(None.from(Many.items(1, 2, 3)).await())
         }
         @Test
-        fun `source executes exactly once on multiple request calls`() {
+        fun `thenReturn emits value after None completes`() {
             Verify.that(None.complete<Int>().thenReturn(42))
                 .assertNext { assertEquals(42, it) }
                 .completesNormally()

@@ -79,12 +79,10 @@ class VerifyTest {
         }
     }
 
-    class ThenCancelsTest {
+    class AbortedTest {
 
-        @Test fun `stops subscription after cancel`() {
-            Verify.that(Many.items(1, 2, 3))
-                .emitsNext(1)
-                .completesNormally()
+        @Test fun `aborted verifies upstream cancel signal`() {
+            Verify.that(Many.items(1, 2, 3)).aborted()
         }
     }
 
@@ -124,12 +122,10 @@ class VerifyTest {
         }
     }
 
-    class IsSubscribedTest {
+    class CompletedTest {
 
-        @Test fun `checkpoint does not consume items`() {
-            Verify.that(Many.items(1, 2))
-                .emitsNext(1, 2)
-                .completesNormally()
+        @Test fun `completed verifies natural completion signal`() {
+            Verify.that(Many.items(1, 2, 3)).emitsNext(1, 2, 3).completed()
         }
     }
 
@@ -150,7 +146,7 @@ class VerifyTest {
         }
     }
 
-    class IsAbsentTest {
+    class CompletesEmptyTest {
 
         @Test fun `passes when Maybe is empty`() {
             Verify.that(Maybe.empty<Int>()).completesEmpty()

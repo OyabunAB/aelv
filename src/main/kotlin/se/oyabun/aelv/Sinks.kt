@@ -26,18 +26,24 @@ import kotlin.concurrent.withLock
 private const val DEFAULT_BUFFER = 256
 
 /**
+ * Common interface for all aelv sink types.
+ *
+ * Returns [Self] from mutating operations to enable fluent chaining:
+ * ```kotlin
+ * Sinks.broadcast<Int>().emit(1, 2, 3).complete()
+ * ```
+ */
+interface SinkOf<T : Any, Self : SinkOf<T, Self>> {
+    fun emit(value: T): Self
+    fun emit(vararg values: T): Self
+    fun complete(): Self
+    fun error(cause: Exception): Self
+}
+
+/**
  * A hot multicast push source.
  *
- * Push items with [emit] (suspend — backs off when the slowest subscriber's channel is full)
- * or [tryEmit] (non-suspend — returns false if any subscriber channel is full).
- *
- * Signal terminal state with [complete] or [error].
- * Obtain subscribable views via [asMany] or [asOne].
- *
- * Obtain instances via:
- * - [Sinks.broadcast]
- * - [Sinks.replay]
- * - [Sinks.replayLast]
+ * Obtain instances via [Sinks.broadcast], [Sinks.replay], [Sinks.replayLast].
  */
 sealed class Sink<T : Any>(
     private val historySize: Int,
@@ -48,7 +54,7 @@ sealed class Sink<T : Any>(
     private val history     = ArrayDeque<Signal.Upstream.Next<T>>()
     private val subscribers = CopyOnWriteArrayList<Channel<Signal.Upstream<T>>>()
 
-    fun emit(value: T) {
+    protected fun doEmit(value: T) {
         if (terminal.get().notUnset()) return
         val signal = Signal.Upstream.Next(value)
         lock.withLock {
@@ -60,23 +66,19 @@ sealed class Sink<T : Any>(
         }
     }
 
-    /** Returns false if the sink is terminated. */
-    fun tryEmit(value: T): Boolean {
-        if (terminal.get().notUnset()) return false
-        emit(value)
-        return true
-    }
-
-    fun complete() = terminate(Signal.Upstream.Complete)
-
-    fun error(cause: Exception) = terminate(Signal.Upstream.Error(cause))
-
-    private fun terminate(signal: Signal.Upstream<T>) {
+    protected fun doTerminate(signal: Signal.Upstream<T>) {
         if (!terminal.compareAndSet(Unset, signal)) return
         for (inbox in subscribers) {
             inbox.trySend(signal)
             inbox.close()
         }
+    }
+
+    /** Returns false if the sink is terminated. */
+    fun tryEmit(value: T): Boolean {
+        if (terminal.get().notUnset()) return false
+        doEmit(value)
+        return true
     }
 
     private fun register(inbox: Channel<Signal.Upstream<T>>): AutoCloseable {
@@ -134,23 +136,38 @@ sealed class Sink<T : Any>(
 }
 
 /** Emits only to subscribers present at the time of emission; no history. */
-class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) : Sink<T>(
-    historySize = 0,
-    bufferSize  = bufferSize,
-)
+class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) :
+    Sink<T>(historySize = 0, bufferSize = bufferSize),
+    SinkOf<T, BroadcastSink<T>> {
+
+    override fun emit(value: T): BroadcastSink<T>          = apply { doEmit(value) }
+    override fun emit(vararg values: T): BroadcastSink<T>  = apply { values.forEach { doEmit(it) } }
+    override fun complete(): BroadcastSink<T>               = apply { doTerminate(Signal.Upstream.Complete) }
+    override fun error(cause: Exception): BroadcastSink<T> = apply { doTerminate(Signal.Upstream.Error(cause)) }
+}
 
 /** Buffers the full emission history; late subscribers receive all past items then live items. */
-class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) : Sink<T>(
-    historySize = Int.MAX_VALUE,
-    bufferSize  = bufferSize,
-)
+class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) :
+    Sink<T>(historySize = Int.MAX_VALUE, bufferSize = bufferSize),
+    SinkOf<T, ReplaySink<T>> {
+
+    override fun emit(value: T): ReplaySink<T>          = apply { doEmit(value) }
+    override fun emit(vararg values: T): ReplaySink<T>  = apply { values.forEach { doEmit(it) } }
+    override fun complete(): ReplaySink<T>               = apply { doTerminate(Signal.Upstream.Complete) }
+    override fun error(cause: Exception): ReplaySink<T> = apply { doTerminate(Signal.Upstream.Error(cause)) }
+}
 
 /** Buffers the last [n] items; late subscribers receive recent history then live items. */
-class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER) : Sink<T>(
-    historySize = count,
-    bufferSize  = bufferSize,
-) {
+class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER) :
+    Sink<T>(historySize = count, bufferSize = bufferSize),
+    SinkOf<T, ReplayLastSink<T>> {
+
     init { require(count > 0) { "ReplayLastSink requires count > 0, got $count" } }
+
+    override fun emit(value: T): ReplayLastSink<T>          = apply { doEmit(value) }
+    override fun emit(vararg values: T): ReplayLastSink<T>  = apply { values.forEach { doEmit(it) } }
+    override fun complete(): ReplayLastSink<T>               = apply { doTerminate(Signal.Upstream.Complete) }
+    override fun error(cause: Exception): ReplayLastSink<T> = apply { doTerminate(Signal.Upstream.Error(cause)) }
 }
 
 object Sinks {
@@ -168,36 +185,36 @@ object Sinks {
 
 /**
  * A unicast push source — exactly one subscriber is permitted for the lifetime of this sink.
- *
- * A second call to [asMany] or [asOne] after a subscriber has already been registered will
- * deliver an [IllegalStateException] to that subscriber immediately.
- *
- * Uses a [ConcurrentLinkedQueue] and a conflated [Channel] as wakeup signal.
  */
-class UnicastSink<T : Any> {
+class UnicastSink<T : Any> : SinkOf<T, UnicastSink<T>> {
 
     private val queue      = ConcurrentLinkedQueue<T>()
     private val signal     = Channel<Unit>(Channel.CONFLATED)
     private val terminal   = AtomicReference<Signal.Upstream<T>>(null)
     private val subscribed = AtomicBoolean(false)
 
-    /**
-     * Queues [value] in an unbounded [java.util.concurrent.ConcurrentLinkedQueue].
-     * Not a suspend function — memory grows without bound if no subscriber is consuming.
-     */
-    fun emit(value: T) {
+    override fun emit(value: T): UnicastSink<T> {
         queue.add(value)
         signal.trySend(Unit)
+        return this
     }
 
-    fun complete() {
+    override fun emit(vararg values: T): UnicastSink<T> {
+        values.forEach { queue.add(it) }
+        signal.trySend(Unit)
+        return this
+    }
+
+    override fun complete(): UnicastSink<T> {
         terminal.compareAndSet(null, Signal.Upstream.Complete)
         signal.trySend(Unit)
+        return this
     }
 
-    fun error(cause: Exception) {
+    override fun error(cause: Exception): UnicastSink<T> {
         terminal.compareAndSet(null, Signal.Upstream.Error(cause))
         signal.trySend(Unit)
+        return this
     }
 
     fun asMany(): Many<T> = Many.generate { downstream ->

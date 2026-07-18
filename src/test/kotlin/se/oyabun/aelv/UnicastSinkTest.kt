@@ -57,13 +57,22 @@ class UnicastSinkTest {
     }
 
     @Test
-    fun `subscriber receives items emitted after subscription`() {
+    fun `subscriber receives items emitted before subscription`() {
         val sink = Sinks.unicast<String>()
         sink.emit("hello")
         sink.complete()
 
         Verify.that(sink.asMany())
             .emitsNext("hello")
+            .completesNormally()
+    }
+
+    @Test
+    fun `subscriber receives items emitted after subscription`() {
+        val sink    = Sinks.unicast<Int>()
+        val emitter = None.defer<Int> { sink.emit(1); sink.emit(2); sink.complete() }.toMany()
+        Verify.that(merge(sink.asMany(), emitter))
+            .emitsNext(1, 2)
             .completesNormally()
     }
 
@@ -87,13 +96,14 @@ class UnicastSinkTest {
     }
 
     @Test
-    fun `asOne returns One emitting the next available item`() {
+    fun `asOne returns first item only`() {
         val sink = Sinks.unicast<String>()
         sink.emit("first")
         sink.emit("second")
+        sink.complete()
 
         Verify.that(sink.asOne())
-            .emitsNext("first")
+            .assertNext { assertEquals("first", it) }
             .completesNormally()
     }
 

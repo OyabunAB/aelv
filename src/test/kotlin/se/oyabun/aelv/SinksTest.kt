@@ -48,17 +48,19 @@ class SinksTest {
 
         @Test fun `error propagates to all subscribers`() {
             val sink    = Sinks.broadcast<Int>()
-            val trigger = Many.defer<Int>(factory = suspend { sink.error(RuntimeException("boom")); Many.empty() })
-                .delaySubscription(1.milliseconds)
-            Verify.that(sink.asMany().mergeWith(trigger))
-                .failed(within = 5.seconds)
+            val sub1    = sink.asMany()
+            val sub2    = sink.asMany()
+            val trigger = None.defer<Int> { sink.error(RuntimeException("boom")) }.toMany()
+            Verify.that(merge(sub1, sub2, trigger))
+                .failedWith<RuntimeException>(within = 5.seconds) { assertEquals("boom", it.message) }
         }
 
         @Test fun `complete propagates to all subscribers`() {
             val sink    = Sinks.broadcast<Int>()
-            val trigger = Many.defer<Int>(factory = suspend { sink.complete(); Many.empty() })
-                .delaySubscription(1.milliseconds)
-            Verify.that(sink.asMany().mergeWith(trigger))
+            val sub1    = sink.asMany()
+            val sub2    = sink.asMany()
+            val trigger = None.defer<Int> { sink.complete() }.toMany()
+            Verify.that(merge(sub1, sub2, trigger))
                 .completesNormally(within = 5.seconds)
         }
 
@@ -82,10 +84,9 @@ class SinksTest {
         @Test fun `subscriber receives history then live items`() {
             val sink    = Sinks.replay<Int>()
             sink.emit(1); sink.emit(2)
-            val emitter = Many.defer<Int>(factory = suspend { sink.emit(3); sink.complete(); Many.empty() })
-                .delaySubscription(1.milliseconds)
+            val emitter = None.defer<Int> { sink.emit(3); sink.complete() }.toMany()
             Verify.that(sink.asMany().take(3).mergeWith(emitter))
-                .emitsCount(3)
+                .emitsNext(1, 2, 3)
                 .completesNormally(within = 5.seconds)
         }
 

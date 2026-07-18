@@ -146,9 +146,9 @@ class OperatorsTest {
 
         @Test
         fun `flatMap expands each item`() {
-            Verify.that(Many.items(1, 2, 3).flatMap { Many.items(it, it * 10) })
-                .emitsCount(6)
-                .completesNormally()
+            val source = Many.items(1, 2, 3)
+            val result = source.flatMap { Many.items(it, it * 10) }.toList().map { it.sorted() }
+            Verify.that(result).emitsNext(listOf(1, 2, 3, 10, 20, 30)).completesNormally()
         }
 
         @Test
@@ -180,52 +180,56 @@ class OperatorsTest {
 
         @Test
         fun `merge interleaves two streams`() {
-            Verify.that(merge(Many.items(1, 3), Many.items(2, 4)))
-                .emitsCount(4)
-                .completesNormally()
+            val a      = Many.items(1, 3)
+            val b      = Many.items(2, 4)
+            val result = merge(a, b).toList().map { it.sorted() }
+            Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completesNormally()
         }
 
         @Test
         fun `mergeWith combines two streams`() {
-            Verify.that(Many.items(1, 2).mergeWith(Many.items(3, 4)))
-                .emitsCount(4)
-                .completesNormally()
+            val a      = Many.items(1, 2)
+            val b      = Many.items(3, 4)
+            val result = a.mergeWith(b).toList().map { it.sorted() }
+            Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completesNormally()
         }
 
         @Test
         fun `concat sequences streams in order`() {
-            Verify.that(concat(Many.items(1, 2), Many.items(3, 4)))
-                .emitsNext(1, 2, 3, 4)
-                .completesNormally()
+            val a = Many.items(1, 2)
+            val b = Many.items(3, 4)
+            Verify.that(concat(a, b)).emitsNext(1, 2, 3, 4).completesNormally()
         }
 
         @Test
         fun `concat with empty streams`() {
-            Verify.that(concat(Many.empty(), Many.items(1, 2), Many.empty<Int>()))
+            val source = Many.items(1, 2)
+            Verify.that(concat(Many.empty(), source, Many.empty<Int>()))
                 .emitsNext(1, 2)
                 .completesNormally()
         }
 
         @Test
         fun `zip pairs items from two streams`() {
-            Verify.that(zip(Many.items(1, 2, 3), Many.items("a", "b", "c")) { n, s -> "$n$s" })
+            val numbers = Many.items(1, 2, 3)
+            val letters = Many.items("a", "b", "c")
+            Verify.that(zip(numbers, letters) { n, s -> "$n$s" })
                 .emitsNext("1a", "2b", "3c")
                 .completesNormally()
         }
 
         @Test
-        fun `zip does not hang when source A errors after source B completes`() = runTest {
-            // Regression for Bug Z2: post-loop channelA probe must be non-blocking.
+        fun `zip does not hang when source A errors after source B completes`() {
             val cause   = InvalidDemandException(-1)
             val sourceA = Many.generate<Int> { emit ->
                 emit(Signal.Upstream.Next(1))
                 emit(Signal.Upstream.Next(2))
                 emit(Signal.Upstream.Error(cause))
             }
-            val result = zip(sourceA, Many.items("a")) { n, s -> "$n$s" }.toList().await()
-            // Either completes with ["1a"] or surfaces the error from A — either is acceptable.
-            // What must NOT happen is a hang.
-            assertTrue(result is Success || result is Failure)
+            val sourceB = Many.items("a")
+            Verify.that(zip(sourceA, sourceB) { n, s -> "$n$s" })
+                .emitsNext("1a")
+                .completesNormally()
         }
     }
 
@@ -457,10 +461,13 @@ class OperatorsTest {
         @Test
         fun `groups items by key`() = runTest {
             val byKey = mutableMapOf<Int, MutableList<Int>>()
-            Verify.that(Many.items(1, 2, 3, 4, 5, 6)
+            val source = Many.items(1, 2, 3, 4, 5, 6)
+            Verify.that(source
                 .groupBy({ it % 2 }) { key, group -> group.map { key to it } }
-                .doOnNext { (k, v) -> byKey.getOrPut(k) { mutableListOf() }.add(v) })
-                .emitsCount(6)
+                .doOnNext { (k, v) -> byKey.getOrPut(k) { mutableListOf() }.add(v) }
+                .toList()
+                .map { it.size })
+                .emitsNext(6)
                 .completesNormally()
             assertEquals(listOf(2, 4, 6), byKey[0]?.sorted())
             assertEquals(listOf(1, 3, 5), byKey[1]?.sorted())
@@ -469,11 +476,14 @@ class OperatorsTest {
         @Test
         fun `each group receives a terminal Complete`() = runTest {
             val completed = mutableSetOf<String>()
-            Verify.that(Many.items("a", "b", "a", "c")
+            val source    = Many.items("a", "b", "a", "c")
+            Verify.that(source
                 .groupBy({ it }) { key, group ->
                     group.doOnComplete { completed.add(key) }.map { key to it }
-                })
-                .emitsCount(4)
+                }
+                .toList()
+                .map { it.map { (k, _) -> k }.toSet() })
+                .emitsNext(setOf("a", "b", "c"))
                 .completesNormally()
             assertEquals(setOf("a", "b", "c"), completed)
         }
@@ -513,11 +523,12 @@ class OperatorsTest {
 
         @Test
         fun `Cancel on outer stream cancels all group pipelines`() {
-            Verify.that(Many.items(1, 2, 3, 4, 5, 6)
+            val source = Many.items(1, 2, 3, 4, 5, 6)
+            Verify.that(source
                 .groupBy({ it % 2 }) { _, group -> group }
                 .take(1))
                 .emitsCount(1)
-                .completesNormally()
+                .completed()
         }
 
         @Test
@@ -554,11 +565,15 @@ class OperatorsTest {
 
         @Test
         fun `groupHandler can apply different transforms per key`() {
-            Verify.that(Many.items(1, 2, 3, 4)
-                .groupBy({ it % 2 }) { key, group ->
-                    if (key == 0) group.map { it * 10 } else group.map { it * 100 }
-                })
-                .emitsCount(4)
+            Verify.that(
+                Many.items(1, 2, 3, 4)
+                    .groupBy({ it % 2 }) { key, group ->
+                        if (key == 0) group.map { it * 10 } else group.map { it * 100 }
+                    }
+                    .toList()
+                    .map { it.sorted() }
+            )
+                .emitsNext(listOf(20, 40, 100, 300))
                 .completesNormally()
         }
     }
@@ -566,11 +581,10 @@ class OperatorsTest {
     class SwitchMap {
 
         @Test
-        fun `switchMap emits from latest inner stream only`() = runTest {
-            val result = Many.items(1, 2, 3).switchMap { Many.items(it * 10) }.toList().await()
-            assertIs<Success<List<Int>>>(result)
-            assertTrue(result.value.isNotEmpty())
-            assertTrue(result.value.last() == 30)
+        fun `switchMap emits from latest inner stream only`() {
+            val source = Many.items(1, 2, 3)
+            val result = source.switchMap { Many.items(it * 10) }.toList().map { it.last() }
+            Verify.that(result).emitsNext(30).completesNormally()
         }
 
         @Test
@@ -699,10 +713,10 @@ class OperatorsTest {
     class OnBackpressureDrop {
 
         @Test
-        fun `onBackpressureDrop completes normally on small source`() = runTest {
-            val result = Many.items(1, 2, 3).onBackpressureDrop().toList().await()
-            assertIs<Success<List<Int>>>(result)
-            assertTrue(result.value.isNotEmpty())
+        fun `onBackpressureDrop completes normally on small source`() {
+            Verify.that(Many.items(1, 2, 3).onBackpressureDrop())
+                .emitsNext(1, 2, 3)
+                .completesNormally()
         }
 
         @Test
@@ -729,7 +743,7 @@ class OperatorsTest {
     class DoOnSubscribe {
 
         @Test
-        fun `doOnSubscribe fires before any items`() = runTest {
+        fun `doOnSubscribe fires before any items`() {
             val fired = mutableListOf<String>()
             Verify.that(Many.items(1, 2, 3)
                 .doOnSubscribe { fired.add("subscribed") }
@@ -772,11 +786,11 @@ class OperatorsTest {
     class BufferTimeout {
 
         @Test
-        fun `bufferTimeout emits bucket when size reached`() = runTest {
-            val result = Many.items(1, 2, 3, 4).bufferTimeout(2, 5.seconds).toList().await()
-            assertIs<Success<List<List<Int>>>>(result)
-            assertTrue(result.value.isNotEmpty())
-            assertTrue(result.value.all { it.size <= 2 })
+        fun `bufferTimeout emits bucket when size reached`() {
+            val source = Many.items(1, 2, 3, 4)
+            Verify.that(source.bufferTimeout(2, 5.seconds))
+                .emitsNext(listOf(1, 2), listOf(3, 4))
+                .completesNormally()
         }
 
         @Test
@@ -797,15 +811,18 @@ class OperatorsTest {
     class CombineLatest {
 
         @Test
-        fun `combineLatest pairs latest values`() = runTest {
-            val result = combineLatest(Many.items(1, 2), Many.items("a", "b")) { n, s -> "$n$s" }.toList().await()
-            assertIs<Success<List<String>>>(result)
-            assertTrue(result.value.isNotEmpty())
+        fun `combineLatest pairs latest values`() {
+            val numbers = Many.items(1, 2)
+            val letters = Many.items("a", "b")
+            val result  = combineLatest(numbers, letters) { n, s -> "$n$s" }.toList().map { it.last() }
+            Verify.that(result).emitsNext("2b").completesNormally()
         }
 
         @Test
         fun `combineLatest on empty source completes without items`() {
-            Verify.that(combineLatest(Many.empty<Int>(), Many.items("a")) { n, s -> "$n$s" })
+            val empty   = Many.empty<Int>()
+            val letters = Many.items("a")
+            Verify.that(combineLatest(empty, letters) { n, s -> "$n$s" })
                 .completesNormally()
         }
     }
@@ -814,26 +831,28 @@ class OperatorsTest {
 
         @Test
         fun `zip pairs two One values`() {
-            Verify.that(zip(One.single(1), One.single("a")) { n, s -> "$n$s" })
+            val one   = One.single(1)
+            val other = One.single("a")
+            Verify.that(zip(one, other) { n, s -> "$n$s" })
                 .emitsNext("1a")
                 .completesNormally()
         }
 
         @Test
         fun `zip completes empty when first source is empty`() = runTest {
-            val result = zip(
-                One.defer<Int> { throw NoSuchElementException() }.recover { One.single(0) }
-                    .flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } },
-                One.single("a")
-            ) { n, s -> "$n$s" }.await()
+            val empty  = One.defer<Int> { throw NoSuchElementException() }.recover { One.single(0) }
+                .flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } }
+            val other  = One.single("a")
+            val result = zip(empty, other) { n, s -> "$n$s" }.await()
             assertIs<Failure<AelvException>>(result)
         }
 
         @Test
         fun `zip propagates error from first source`() {
-            val cause = InvalidDemandException(-1)
-            Verify.that(zip(One.error<Int>(cause), One.single("a")) { n, s -> "$n$s" })
-
+            val cause  = InvalidDemandException(-1)
+            val first  = One.error<Int>(cause)
+            val second = One.single("a")
+            Verify.that(zip(first, second) { n, s -> "$n$s" })
                 .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
@@ -972,58 +991,47 @@ class OperatorsTest {
     class SinkTests {
 
         @Test
-        fun `broadcast sink delivers items to subscriber`() = runTest {
-            val sink = Sinks.replay<Int>()
-            sink.emit(1)
-            sink.emit(2)
-            sink.complete()
-
-            Verify.that(sink.asMany())
+        fun `broadcast sink delivers items to active subscriber`() {
+            val sink     = Sinks.broadcast<Int>()
+            val emitter  = None.defer<Int> { sink.emit(1); sink.emit(2); sink.complete() }.toMany()
+            Verify.that(merge(sink.asMany(), emitter))
                 .emitsNext(1, 2)
                 .completesNormally()
         }
 
         @Test
-        fun `broadcast sink does not replay to late subscriber`() = runTest {
+        fun `broadcast sink does not replay to late subscriber`() {
             val sink = Sinks.broadcast<Int>()
             sink.emit(1)
             sink.emit(2)
             sink.emit(3)
             sink.complete()
-            // broadcast has no history — late subscriber gets only the terminal
             Verify.that(sink.asMany()).completesNormally()
         }
 
         @Test
-        fun `replay sink replays full history to late subscriber`() = runTest {
+        fun `replay sink replays full history to late subscriber`() {
             val sink = Sinks.replay<Int>()
             sink.emit(1)
             sink.emit(2)
             sink.complete()
-
-            Verify.that(sink.asMany())
-                .emitsNext(1, 2)
-                .completesNormally()
+            Verify.that(sink.asMany()).emitsNext(1, 2).completesNormally()
         }
 
         @Test
-        fun `replayLast sink replays only last n items`() = runTest {
+        fun `replayLast sink replays only last n items`() {
             val sink = Sinks.replayLast<Int>(2)
             sink.emit(1)
             sink.emit(2)
             sink.emit(3)
             sink.complete()
-
-            Verify.that(sink.asMany())
-                .emitsNext(2, 3)
-                .completesNormally()
+            Verify.that(sink.asMany()).emitsNext(2, 3).completesNormally()
         }
 
         @Test
         fun `sink complete is delivered to subscriber`() {
             val sink = Sinks.broadcast<Int>()
             sink.complete()
-
             Verify.that(sink.asMany()).completesNormally()
         }
 
@@ -1032,22 +1040,17 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             val sink  = Sinks.broadcast<Int>()
             sink.error(cause)
-
             Verify.that(sink.asMany()).failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
-        fun `broadcast sink delivers to multiple concurrent subscribers`() = runTest {
-            val sink = Sinks.replay<Int>()
-            sink.emit(1)
-            sink.emit(2)
-            sink.complete()
-
-            Verify.that(sink.asMany())
-                .emitsNext(1, 2)
-                .completesNormally()
-            Verify.that(sink.asMany())
-                .emitsNext(1, 2)
+        fun `broadcast sink delivers to multiple concurrent subscribers`() {
+            val sink    = Sinks.broadcast<Int>()
+            val emitter = None.defer<Int> { sink.emit(1); sink.emit(2); sink.complete() }.toMany()
+            val sub1    = sink.asMany()
+            val sub2    = sink.asMany()
+            Verify.that(merge(sub1, sub2, emitter).toList().map { it.sorted() })
+                .emitsNext(listOf(1, 1, 2, 2))
                 .completesNormally()
         }
     }
