@@ -81,7 +81,7 @@ sealed class Sink<T : Any>(
 
     private fun register(inbox: Channel<Signal.Upstream<T>>): AutoCloseable {
         lock.withLock { subscribers.add(inbox) }
-        return AutoCloseable { subscribers.remove(inbox) }
+        return AutoCloseable { lock.withLock { subscribers.remove(inbox) } }
     }
 
     fun asMany(): Many<T> = Many.generate { emit ->
