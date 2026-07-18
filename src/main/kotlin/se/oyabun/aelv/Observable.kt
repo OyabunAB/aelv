@@ -241,6 +241,10 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
         if (!triggerFailed) source(onNext, onComplete, onError)
     }
 
+    fun discard(): None<T> = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }
+
+    fun <R : Any> thenReturn(value: R): One<R> = discard().then { One.single(value) }
+
     companion object {
         internal val log = Logging.of<Observable<*, *>>()
     }

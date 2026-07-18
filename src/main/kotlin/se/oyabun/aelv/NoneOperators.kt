@@ -146,5 +146,3 @@ fun <T : Any> None<T>.subscribeOn(context: CoroutineContext): None<T> =
 
 fun <T : Any> None<T>.publishOn(context: CoroutineContext): None<T> =
     toMany().publishOn(context).discard()
-
-fun <T : Any, R : Any> None<T>.thenReturn(value: R): One<R>  = then { One.single(value) }

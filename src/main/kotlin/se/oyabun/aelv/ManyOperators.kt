@@ -707,5 +707,3 @@ fun <T : Any, R : Any> Many<T>.flatMapOne(transform: suspend (T) -> One<R>): Man
     val asManyTransform: suspend (T) -> Many<R> = { value -> Many.from(transform(value)) }
     return flatMap(transform = asManyTransform)
 }
-
-fun <T : Any, R : Any> Many<T>.thenReturn(value: R): One<R>  = discard().thenReturn(value)

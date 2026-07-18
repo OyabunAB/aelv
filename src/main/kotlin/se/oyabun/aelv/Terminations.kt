@@ -223,9 +223,3 @@ suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
         else                   -> NoSuchElementException().left()
     }
 }
-
-/** Consumes and discards all items. Errors propagate. */
-fun <T : Any> Many<T>.discard(): None<T> = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }
-
-/** Discards the value. Errors propagate. */
-fun <T : Any> One<T>.discard(): None<T>  = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }

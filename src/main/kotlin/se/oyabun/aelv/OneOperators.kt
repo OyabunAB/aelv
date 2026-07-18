@@ -220,5 +220,3 @@ fun <T : Any> One<T>.cache(): One<T> {
 
 fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) -> R): One<R> =
     zip(this, other, transform)
-
-fun <T : Any, R : Any> One<T>.thenReturn(value: R): One<R>   = map { value }
