@@ -18,8 +18,6 @@ package se.oyabun.aelv
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.channels.ClosedSendChannelException
-import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 
 internal object Unset
