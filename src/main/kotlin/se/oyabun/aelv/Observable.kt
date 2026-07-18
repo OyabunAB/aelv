@@ -21,6 +21,7 @@ import kotlin.internal.LowPriorityInOverloadResolution
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.reactivestreams.Publisher
 
@@ -170,8 +171,21 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
     fun retry(times: Long = Long.MAX_VALUE): Self = retry(Policy.retry().maxAttempts(times))
 
     fun retry(policy: Policy.Retry): Self = wrap { onNext, onComplete, onError ->
-        val result = retryLoop(policy, log) { Either.catching { source(onNext, onComplete, onError) } }
-        if (result is Failure) onError(result.value) else onComplete()
+        var attempts = 0L
+        while (true) {
+            val result = Either.catching { source(onNext, onComplete, onError) }
+            when {
+                result is Success                          -> { onComplete(); return@wrap }
+                !policy.filter((result as Failure).value) -> { onError(result.value); return@wrap }
+                attempts >= policy.maxAttempts            -> { log.operator.retryExhausted("retry", result.value); onError(result.value); return@wrap }
+                else -> {
+                    log.operator.retrying("retry", attempts, result.value)
+                    val backoffDelay = policy.backoff.delayFor(attempts)
+                    if (backoffDelay.isPositive()) delay(backoffDelay)
+                    attempts++
+                }
+            }
+        }
     }
 
     fun doOnRetry(action: (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
@@ -248,4 +262,12 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
     companion object {
         internal val log = Logging.of<Observable<*, *>>()
     }
+}
+
+private fun guardedSideEffect(name: String, log: Log, action: () -> Unit) {
+    runCatching(action).onFailure { e -> log.operator.sideEffectThrew(name, e) }
+}
+
+private suspend fun guardedSideEffectSuspend(name: String, log: Log, action: suspend () -> Unit) {
+    runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew(name, e) }
 }
