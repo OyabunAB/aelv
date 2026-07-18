@@ -20,6 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 
 internal object Unset
@@ -43,3 +44,33 @@ internal suspend fun <T> SendChannel<T>.sendOrDiscard(value: T) =
 
 internal suspend inline fun <C : AutoCloseable, V> C.using(block: suspend (C) -> V): V =
     try { block(this) } finally { close() }
+
+internal suspend fun retryLoop(
+    policy: Policy.Retry,
+    log: Log,
+    attempt: suspend () -> Either<Exception, Unit>,
+): Either<Exception, Unit> {
+    var attempts = 0L
+    while (true) {
+        val result = attempt()
+        when {
+            result is Success                          -> return result
+            !policy.filter((result as Failure).value) -> return result
+            attempts >= policy.maxAttempts            -> { log.operator.retryExhausted("retry", result.value); return result }
+            else -> {
+                log.operator.retrying("retry", attempts, result.value)
+                val backoffDelay = policy.backoff.delayFor(attempts)
+                if (backoffDelay.isPositive()) delay(backoffDelay)
+                attempts++
+            }
+        }
+    }
+}
+
+internal fun guardedSideEffect(name: String, log: Log, action: () -> Unit) {
+    runCatching(action).onFailure { e -> log.operator.sideEffectThrew(name, e) }
+}
+
+internal suspend fun guardedSideEffectSuspend(name: String, log: Log, action: suspend () -> Unit) {
+    runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew(name, e) }
+}

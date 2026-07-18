@@ -253,83 +253,6 @@ fun <T : Any> Maybe<T>.toOne(): One<T> =
         result ?: throw NoSuchElementException()
     }
 
-fun <T : Any> Maybe<T>.doOnNext(action: (T) -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            { value -> runCatching { action(value) }.onFailure { e -> log.operator.sideEffectThrew("doOnNext", e) }; onNext(value) },
-            onComplete,
-            onError,
-        )
-    }
-
-/** Suspend variant of [doOnNext]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Maybe<T>.doOnNext(action: suspend (T) -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            { value -> runCatching { action(value) }.onFailure { e -> log.operator.sideEffectThrew("doOnNext", e) }; onNext(value) },
-            onComplete,
-            onError,
-        )
-    }
-
-fun <T : Any> Maybe<T>.doOnComplete(action: () -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(onNext, { runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnComplete", e) }; onComplete() }, onError)
-    }
-
-/** Suspend variant of [doOnComplete] for [Maybe]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Maybe<T>.doOnComplete(action: suspend () -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(onNext, { runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnComplete", e) }; onComplete() }, onError)
-    }
-
-fun <T : Any> Maybe<T>.doOnError(action: (Exception) -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(onNext, onComplete, { issue -> runCatching { action(issue) }.onFailure { e -> log.operator.sideEffectThrew("doOnError", e) }; onError(issue) })
-    }
-
-/** Suspend variant of [doOnError] for [Maybe]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Maybe<T>.doOnError(action: suspend (Exception) -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(onNext, onComplete, { issue -> runCatching { action(issue) }.onFailure { e -> log.operator.sideEffectThrew("doOnError", e) }; onError(issue) })
-    }
-
-fun <T : Any> Maybe<T>.doOnSubscribe(action: () -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnSubscribe", e) }
-        source(onNext, onComplete, onError)
-    }
-
-/** Suspend variant of [doOnSubscribe] for [Maybe]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Maybe<T>.doOnSubscribe(action: suspend () -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnSubscribe", e) }
-        source(onNext, onComplete, onError)
-    }
-
-fun <T : Any> Maybe<T>.doFinally(action: (Signal.Terminal) -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            onNext,
-            { runCatching { action(Signal.Upstream.Complete) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }; onComplete() },
-            { issue -> runCatching { action(Signal.Upstream.Error(issue)) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }; onError(issue) },
-        )
-    }
-
-@LowPriorityInOverloadResolution
-fun <T : Any> Maybe<T>.doFinally(action: suspend (Signal.Terminal) -> Unit): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        source(
-            onNext,
-            { runCatching { action(Signal.Upstream.Complete) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }; onComplete() },
-            { issue -> runCatching { action(Signal.Upstream.Error(issue)) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }; onError(issue) },
-        )
-    }
-
 fun <T : Any> Maybe<T>.recover(fallback: (Exception) -> Maybe<T>): Maybe<T> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -359,75 +282,6 @@ suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> = Either.catching 
     )
     result
 }
-
-fun <T : Any> Maybe<T>.subscribeOn(context: CoroutineContext): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        withContext(currentCoroutineContext() + context) {
-            source(onNext, onComplete, onError)
-        }
-    }
-
-fun <T : Any> Maybe<T>.publishOn(context: CoroutineContext): Maybe<T> =
-    toMany().publishOn(context).firstMaybe()
-
-fun <T : Any, R : Any> Maybe<T>.thenReturn(value: R): One<R> = map { value }.or { value }
-
-/**
- * Delays subscription to this [Maybe] by [delay] before subscribing to the source.
- * The source is subscribed only after the delay has elapsed.
- */
-fun <T : Any> Maybe<T>.delaySubscription(delay: Duration): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        kotlinx.coroutines.delay(delay)
-        source(onNext, onComplete, onError)
-    }
-
-/**
- * Delays subscription to this [Maybe] until the [trigger] publisher emits an item or completes.
- * The trigger's first signal starts the subscription; the trigger itself is then cancelled.
- * If the trigger errors, the error is forwarded and this source is never subscribed.
- */
-fun <T : Any> Maybe<T>.delaySubscription(trigger: Publisher<*>): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        var triggerFailed = false
-        Many.from(trigger).source(
-            { Signal.Downstream.Cancel },
-            { },
-            { cause -> triggerFailed = true; onError(cause) },
-        )
-        if (triggerFailed) return@Maybe
-        source(onNext, onComplete, onError)
-    }
-
-/**
- * Re-subscribes to the source on error up to [times] times.
- * Delegates to [retry] with a policy capped at [times] attempts.
- */
-fun <T : Any> Maybe<T>.retry(times: Long = Long.MAX_VALUE): Maybe<T> =
-    retry(Policy.retry().maxAttempts(times))
-
-/**
- * Re-subscribes to the source on error according to [policy].
- * The policy controls the error filter, maximum attempt count, and backoff strategy.
- */
-fun <T : Any> Maybe<T>.retry(policy: Policy.Retry): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
-        var attempts = 0L
-        while (true) {
-            val result = collect { onNext(it) }
-            when {
-                result is Success                               -> { onComplete(); return@Maybe }
-                !policy.filter((result as Either.Left).value)  -> { onError(result.value); return@Maybe }
-                attempts >= policy.maxAttempts                 -> { log.operator.retryExhausted("retry", result.value); onError(result.value); return@Maybe }
-                else -> {
-                    log.operator.retrying("retry", attempts, result.value)
-                    val backoffDelay = policy.backoff.delayFor(attempts)
-                    if (backoffDelay.isPositive()) delay(backoffDelay)
-                    attempts++
-                }
-            }
-        }
-    }
 /**
  * Invokes [action] with the attempt number and cause before each retry.
  *
@@ -445,7 +299,7 @@ fun <T : Any> Maybe<T>.doOnRetry(action: (attempt: Long, cause: Exception) -> Un
             onNext,
             onComplete,
             { cause ->
-                runCatching { action(attempt++, cause) }.onFailure { e -> log.operator.sideEffectThrew("doOnRetry", e) }
+                guardedSideEffectSuspend("doOnRetry", log) { action(attempt++, cause) }
                 onError(cause)
             },
         )
@@ -460,7 +314,7 @@ fun <T : Any> Maybe<T>.doOnRetry(action: suspend (attempt: Long, cause: Exceptio
             onNext,
             onComplete,
             { cause ->
-                runCatching { action(attempt++, cause) }.onFailure { e -> log.operator.sideEffectThrew("doOnRetry", e) }
+                guardedSideEffectSuspend("doOnRetry", log) { action(attempt++, cause) }
                 onError(cause)
             },
         )

@@ -416,37 +416,6 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
 fun <T : Any> Many<T>.mergeWith(other: Many<T>): Many<T> = merge(this, other)
 
 /**
- * Delays subscription to this [Many] until the [trigger] publisher emits an item or completes.
- * The trigger's first signal starts the subscription; the trigger itself is then cancelled.
- * If the trigger errors, the error is forwarded and this source is never subscribed.
- */
-fun <T : Any> Many<T>.delaySubscription(trigger: Publisher<*>): Many<T> =
-    Many.generate { emit ->
-        var triggerFailed = false
-        Many.from(trigger).source(
-            { Signal.Downstream.Cancel },
-            { },
-            { issue -> triggerFailed = true; emit(Signal.Upstream.Error(issue)) },
-        )
-        if (triggerFailed) return@generate
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-fun <T : Any> Many<T>.delaySubscription(delay: Duration): Many<T> =
-    Many.generate { emit ->
-        kotlinx.coroutines.delay(delay)
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/**
  * Collects items into fixed-size lists of [size] and emits each list downstream.
  * A partial list is emitted on upstream completion.
  */
@@ -696,120 +665,6 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
         }
     }
 
-fun <T : Any> Many<T>.doOnNext(action: (T) -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> runCatching { action(value) }.onFailure { e -> log.operator.sideEffectThrew("doOnNext", e) }; emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [doOnNext] — [action] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.doOnNext(action: suspend (T) -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> runCatching { action(value) }.onFailure { e -> log.operator.sideEffectThrew("doOnNext", e) }; emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-fun <T : Any> Many<T>.doOnComplete(action: () -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnComplete", e) }; emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [doOnComplete] — [action] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.doOnComplete(action: suspend () -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnComplete", e) }; emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-fun <T : Any> Many<T>.doOnError(action: (Exception) -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> runCatching { action(issue) }.onFailure { e -> log.operator.sideEffectThrew("doOnError", e) }; emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [doOnError] — [action] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.doOnError(action: suspend (Exception) -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> runCatching { action(issue) }.onFailure { e -> log.operator.sideEffectThrew("doOnError", e) }; emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-fun <T : Any> Many<T>.doOnSubscribe(action: () -> Unit): Many<T> =
-    Many.generate { emit ->
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnSubscribe", e) }
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [doOnSubscribe] — [action] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.doOnSubscribe(action: suspend () -> Unit): Many<T> =
-    Many.generate { emit ->
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnSubscribe", e) }
-        source(
-            { value -> emit(Signal.Upstream.Next(value)) },
-            { emit(Signal.Upstream.Complete) },
-            { issue -> emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/**
- * Invokes [action] when the stream terminates for any reason: normal completion, error, or
- * downstream cancellation.  The [Signal.Terminal] argument identifies which terminal was received.
- */
-fun <T : Any> Many<T>.doFinally(action: (Signal.Terminal) -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value ->
-                val downstream = emit(Signal.Upstream.Next(value))
-                if (downstream == Signal.Downstream.Cancel) action(Signal.Downstream.Cancel)
-                downstream
-            },
-            { action(Signal.Upstream.Complete); emit(Signal.Upstream.Complete) },
-            { issue -> action(Signal.Upstream.Error(issue)); emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
-/** Suspend variant of [doFinally] — [action] may call suspend functions. */
-@LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.doFinally(action: suspend (Signal.Terminal) -> Unit): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value ->
-                val downstream = emit(Signal.Upstream.Next(value))
-                if (downstream == Signal.Downstream.Cancel) action(Signal.Downstream.Cancel)
-                downstream
-            },
-            { action(Signal.Upstream.Complete); emit(Signal.Upstream.Complete) },
-            { issue -> action(Signal.Upstream.Error(issue)); emit(Signal.Upstream.Error(issue)) },
-        )
-    }
-
 /**
  * On error, switches to the [Many] returned by [fallback], continuing from there.
  * On normal completion, [fallback] is not invoked.
@@ -869,51 +724,9 @@ fun <T : Any> Many<T>.retry(times: Long = Long.MAX_VALUE): Many<T> =
  */
 fun <T : Any> Many<T>.retry(policy: Policy.Retry): Many<T> =
     Many.generate { emit ->
-        var attempts = 0L
-        while (true) {
-            val result = collect { emit(Signal.Upstream.Next(it)) }
-            when {
-                result is Success                           -> break
-                !policy.filter((result as Either.Left).value)  -> { emit(Signal.Upstream.Error(result.value)); return@generate }
-                attempts >= policy.maxAttempts                  -> { log.operator.retryExhausted("retry", result.value); emit(Signal.Upstream.Error(result.value)); return@generate }
-                else -> {
-                    log.operator.retrying("retry", attempts, result.value)
-                    val backoffDelay = policy.backoff.delayFor(attempts)
-                    if (backoffDelay.isPositive()) delay(backoffDelay)
-                    attempts++
-                }
-            }
-        }
-        emit(Signal.Upstream.Complete)
-    }
-
-/**
- * Switches the dispatcher on which downstream [emit] calls execute.
- * The source continues running on whatever dispatcher it was already using;
- * only the hand-off to the subscriber is moved to [context].
- */
-fun <T : Any> Many<T>.publishOn(context: CoroutineContext): Many<T> =
-    Many.generate { emit ->
-        source(
-            { value -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Next(value)) } },
-            { withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Complete) } },
-            { issue -> withContext(currentCoroutineContext() + context) { emit(Signal.Upstream.Error(issue)) } },
-        )
-    }
-
-/**
- * Switches the dispatcher on which the source lambda executes.
- * Item production runs on [context]; the emit calls themselves remain on the caller's dispatcher.
- */
-fun <T : Any> Many<T>.subscribeOn(context: CoroutineContext): Many<T> =
-    Many.generate { emit ->
-        withContext(currentCoroutineContext() + context) {
-            source(
-                { value -> emit(Signal.Upstream.Next(value)) },
-                { emit(Signal.Upstream.Complete) },
-                { issue -> emit(Signal.Upstream.Error(issue)) },
-            )
-        }
+        val result = retryLoop(policy, log) { collect { emit(Signal.Upstream.Next(it)) } }
+        if (result is Failure) emit(Signal.Upstream.Error(result.value))
+        else emit(Signal.Upstream.Complete)
     }
 
 fun <T : Any> Many<T>.concatWith(other: Many<T>): Many<T> = concat(this, other)

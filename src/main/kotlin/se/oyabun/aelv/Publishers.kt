@@ -59,12 +59,13 @@ internal sealed interface Fusion<out T : Any> {
  * [collect] bypasses the interpreter and uses the existing O(1)-allocation
  * `poll()` loop.
  */
+@Suppress("EXPOSED_SUPER_CLASS")
 class Many<T : Any> private constructor(
     internal val step: Step<T>,
     internal val fusion: Fusion<T> = Fusion.None,
-) : Publisher<T> {
+) : Publisher<T>, Observable<T, Many<T>>() {
 
-    internal suspend fun source(
+    override suspend fun source(
         onNext: suspend (T) -> Signal.Downstream,
         onComplete: suspend () -> Unit,
         onError: suspend (Exception) -> Unit,
@@ -74,6 +75,14 @@ class Many<T : Any> private constructor(
             is Failure  -> onError(result.value)
         }
     }
+
+    override fun wrap(
+        block: suspend (
+            onNext:     suspend (T) -> Signal.Downstream,
+            onComplete: suspend () -> Unit,
+            onError:    suspend (Exception) -> Unit,
+        ) -> Unit,
+    ): Many<T> = Many.fused(block = block)
 
     override fun subscribe(subscriber: Subscriber<in T>) {
         val subscription = StreamSubscription(subscriber) { on, oc, oe -> source(on, oc, oe) }
@@ -260,16 +269,33 @@ class Many<T : Any> private constructor(
  * If the source emits zero items the subscriber receives only `onComplete` without `onNext` — no error.
  * If it emits more than one item, all items after the first are silently consumed.
  */
+@Suppress("EXPOSED_SUPER_CLASS")
 class One<T : Any> private constructor(
-    internal val source: suspend (
+    private val sourceLambda: suspend (
         onNext: suspend (T) -> Signal.Downstream,
         onComplete: suspend () -> Unit,
         onError: suspend (Exception) -> Unit,
     ) -> Unit,
-) : Publisher<T> {
+) : Publisher<T>, Observable<T, One<T>>() {
+
+    internal val source get() = sourceLambda
+
+    override suspend fun source(
+        onNext: suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError: suspend (Exception) -> Unit,
+    ) = sourceLambda(onNext, onComplete, onError)
+
+    override fun wrap(
+        block: suspend (
+            onNext:     suspend (T) -> Signal.Downstream,
+            onComplete: suspend () -> Unit,
+            onError:    suspend (Exception) -> Unit,
+        ) -> Unit,
+    ): One<T> = One(block)
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val subscription = StreamSubscription(subscriber, source)
+        val subscription = StreamSubscription(subscriber, sourceLambda)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
@@ -383,16 +409,33 @@ class One<T : Any> private constructor(
  * and [Maybe.defer] to build one lazily from a suspend block that returns `T?` —
  * a null return means absent.
  */
+@Suppress("EXPOSED_SUPER_CLASS")
 class Maybe<T : Any> internal constructor(
-    internal val source: suspend (
+    private val sourceLambda: suspend (
         onNext:     suspend (T) -> Signal.Downstream,
         onComplete: suspend () -> Unit,
         onError:    suspend (Exception) -> Unit,
     ) -> Unit,
-) : Publisher<T> {
+) : Publisher<T>, Observable<T, Maybe<T>>() {
+
+    internal val source get() = sourceLambda
+
+    override suspend fun source(
+        onNext:     suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError:    suspend (Exception) -> Unit,
+    ) = sourceLambda(onNext, onComplete, onError)
+
+    override fun wrap(
+        block: suspend (
+            onNext:     suspend (T) -> Signal.Downstream,
+            onComplete: suspend () -> Unit,
+            onError:    suspend (Exception) -> Unit,
+        ) -> Unit,
+    ): Maybe<T> = Maybe(block)
 
     override fun subscribe(subscriber: Subscriber<in T>) {
-        val subscription = StreamSubscription(subscriber, source)
+        val subscription = StreamSubscription(subscriber, sourceLambda)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
@@ -489,16 +532,34 @@ class Maybe<T : Any> internal constructor(
  * The type parameter [T] exists only for type-system compatibility and carries no values.
  * Use `None<Unit>` when the type is irrelevant.
  */
+@Suppress("EXPOSED_SUPER_CLASS")
 class None<T : Any> private constructor(
-    private val source: suspend () -> Unit,
-) : Publisher<Nothing> {
+    private val noneSource: suspend () -> Unit,
+) : Publisher<Nothing>, Observable<T, None<T>>() {
+
+    override suspend fun source(
+        onNext:     suspend (T) -> Signal.Downstream,
+        onComplete: suspend () -> Unit,
+        onError:    suspend (Exception) -> Unit,
+    ) = when (val result = await()) {
+        is Success -> onComplete()
+        is Failure -> onError(result.value)
+    }
+
+    override fun wrap(
+        block: suspend (
+            onNext:     suspend (T) -> Signal.Downstream,
+            onComplete: suspend () -> Unit,
+            onError:    suspend (Exception) -> Unit,
+        ) -> Unit,
+    ): None<T> = None { block({ Signal.Downstream.Request }, {}, { throw it }) }
 
     override fun subscribe(subscriber: Subscriber<in Nothing>) {
-        val subscription = CompletionSubscription(subscriber, source)
+        val subscription = CompletionSubscription(subscriber, noneSource)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
     }
 
-    suspend fun await(): Either<Exception, Unit> = Either.catching { source() }
+    suspend fun await(): Either<Exception, Unit> = Either.catching { noneSource() }
 
     companion object {
         fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> Unit): None<T> = None {

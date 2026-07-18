@@ -28,63 +28,6 @@ import org.reactivestreams.Publisher
 
 private val log = Logging.of<None<*>>()
 
-fun <T : Any> None<T>.doOnSubscribe(action: () -> Unit): None<T> =
-    None.defer<T> {
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnSubscribe", e) }
-    }.then { this }
-
-/** Suspend variant of [doOnSubscribe] for [None]. */
-@LowPriorityInOverloadResolution
-fun <T : Any> None<T>.doOnSubscribe(action: suspend () -> Unit): None<T> =
-    None.defer<T> {
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnSubscribe", e) }
-    }.then { this }
-
-fun <T : Any> None<T>.doFinally(action: (Signal.Terminal) -> Unit): None<T> =
-    recover { issue ->
-        runCatching { action(Signal.Upstream.Error(issue)) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }
-        None.error(issue)
-    }.then {
-        runCatching { action(Signal.Upstream.Complete) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }
-        this
-    }
-
-@LowPriorityInOverloadResolution
-fun <T : Any> None<T>.doFinally(action: suspend (Signal.Terminal) -> Unit): None<T> =
-    recover(fallback = suspend { issue: Exception ->
-        runCatching { action(Signal.Upstream.Error(issue)) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }
-        None.error(issue)
-    }).then(producer = suspend {
-        runCatching { action(Signal.Upstream.Complete) }.onFailure { e -> log.operator.sideEffectThrew("doFinally", e) }
-        this
-    })
-
-fun <T : Any> None<T>.doOnComplete(action: () -> Unit): None<T> =
-    then {
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnComplete", e) }
-        this
-    }
-
-@LowPriorityInOverloadResolution
-fun <T : Any> None<T>.doOnComplete(action: suspend () -> Unit): None<T> =
-    then(producer = suspend {
-        runCatching { action() }.onFailure { e -> log.operator.sideEffectThrew("doOnComplete", e) }
-        this
-    })
-
-fun <T : Any> None<T>.doOnError(action: (Exception) -> Unit): None<T> =
-    recover { issue ->
-        runCatching { action(issue) }.onFailure { e -> log.operator.sideEffectThrew("doOnError", e) }
-        None.error(issue)
-    }
-
-@LowPriorityInOverloadResolution
-fun <T : Any> None<T>.doOnError(action: suspend (Exception) -> Unit): None<T> =
-    recover(fallback = suspend { issue: Exception ->
-        runCatching { action(issue) }.onFailure { e -> log.operator.sideEffectThrew("doOnError", e) }
-        None.error(issue)
-    })
-
 /** Recovers from an error by substituting a fallback [None] pipeline. */
 fun <T : Any> None<T>.recover(fallback: (Exception) -> None<T>): None<T> =
     None.generate {
@@ -248,34 +191,4 @@ fun <T : Any> None<T>.delaySubscription(trigger: Publisher<*>): None<T> =
         triggerFailed?.let { throw it }
         val result = await()
         if (result is Failure) throw result.value
-    }
-
-/**
- * Re-subscribes to the source on error up to [times] times.
- * Delegates to [retry] with a policy capped at [times] attempts.
- */
-fun <T : Any> None<T>.retry(times: Long = Long.MAX_VALUE): None<T> =
-    retry(Policy.retry().maxAttempts(times))
-
-/**
- * Re-subscribes to the source on error according to [policy].
- * The policy controls the error filter, maximum attempt count, and backoff strategy.
- */
-fun <T : Any> None<T>.retry(policy: Policy.Retry): None<T> =
-    None.generate {
-        var attempts = 0L
-        while (true) {
-            val result = await()
-            when {
-                result is Success                               -> break
-                !policy.filter((result as Either.Left).value)  -> throw result.value
-                attempts >= policy.maxAttempts                 -> { log.operator.retryExhausted("retry", result.value); throw result.value }
-                else -> {
-                    log.operator.retrying("retry", attempts, result.value)
-                    val backoffDelay = policy.backoff.delayFor(attempts)
-                    if (backoffDelay.isPositive()) delay(backoffDelay)
-                    attempts++
-                }
-            }
-        }
     }
