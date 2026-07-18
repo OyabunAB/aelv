@@ -60,17 +60,6 @@ class Many<T : Any> private constructor(
     internal val fusion: Fusion<T> = Fusion.None,
 ) : Publisher<T>, Observable<T, Many<T>>() {
 
-    override suspend fun source(
-        onNext: suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError: suspend (Exception) -> Unit,
-    ) {
-        when (val result = interpret(step, Frame.Collect(onNext))) {
-            is Success -> if (result.value) onComplete()
-            is Failure -> onError(result.value)
-        }
-    }
-
     override fun wrap(
         block: suspend (
             onNext:     suspend (T) -> Signal.Downstream,
