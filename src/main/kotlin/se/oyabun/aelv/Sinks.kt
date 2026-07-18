@@ -213,7 +213,7 @@ class UnicastSink<T : Any> {
             }
             when (val term = terminal.get()) {
                 null                        -> signal.receive()
-                is Signal.Upstream.Complete -> return@generate
+                is Signal.Upstream.Complete -> { downstream(Signal.Upstream.Complete); return@generate }
                 is Signal.Upstream.Error    -> { downstream(term); return@generate }
                 else                        -> return@generate
             }

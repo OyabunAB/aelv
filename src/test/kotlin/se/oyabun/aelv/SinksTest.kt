@@ -171,6 +171,15 @@ class SinksTest {
                 .completesWithError(within = 5.seconds)
         }
 
+        @Test fun `complete signals onComplete to subscriber`() {
+            val sink = Sinks.unicast<Int>()
+            sink.emit(1)
+            sink.complete()
+            Verify.that(sink.asMany())
+                .emitsNext(1)
+                .completesNormally(within = 1.seconds)
+        }
+
         @Test fun `emit after complete is ignored`() {
             val sink = Sinks.unicast<Int>()
             sink.complete()
