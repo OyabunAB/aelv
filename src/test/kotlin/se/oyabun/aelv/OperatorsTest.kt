@@ -44,9 +44,8 @@ class OperatorsTest {
 
         @Test
         fun `map propagates error`() {
-            val cause = InvalidDemandException(-1)
-            Verify.that(Many.error<Int>(cause).map { it * 2 })
-                .failed()
+            Verify.that(Many.items(1).map { throw InvalidDemandException(-1) })
+                .failedWith<InvalidDemandException>()
         }
 
         @Test
@@ -58,9 +57,8 @@ class OperatorsTest {
 
         @Test
         fun `filter propagates error`() {
-            val cause = InvalidDemandException(-1)
-            Verify.that(Many.error<Int>(cause).filter { it % 2 == 0 })
-                .failed()
+            Verify.that(Many.items(1).filter { throw InvalidDemandException(-1) })
+                .failedWith<InvalidDemandException>()
         }
 
         @Test
@@ -78,24 +76,21 @@ class OperatorsTest {
 
         @Test
         fun `mapNotNull propagates error`() {
-            val cause = InvalidDemandException(-1)
-            Verify.that(Many.error<Int>(cause).mapNotNull { it * 2 })
-                .failed()
+            Verify.that(Many.items(1).mapNotNull { throw InvalidDemandException(-1) })
+                .failedWith<InvalidDemandException>()
         }
 
         @Test
         fun `take limits to n items`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).take(3))
                 .emitsNext(1, 2, 3)
-                .thenCancels()
-                .verify()
+                .completesNormally()
         }
 
         @Test
         fun `take zero emits nothing`() {
             Verify.that(Many.items(1, 2, 3).take(0))
-                .thenCancels()
-                .verify()
+                .completesNormally()
         }
 
         @Test
@@ -287,7 +282,8 @@ class OperatorsTest {
         fun `retry exhausts and propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(times = 2))
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -308,7 +304,8 @@ class OperatorsTest {
         fun `retry with Retry max exhausts and propagates`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(Policy.retry().maxAttempts(2)))
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -343,7 +340,8 @@ class OperatorsTest {
         fun `retry filter skips non-matching errors`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(Policy.retry().on(NoSuchElementException::class).maxAttempts(5)))
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -371,28 +369,28 @@ class OperatorsTest {
         fun `fold propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).fold(0) { acc, item -> acc + item })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
-        fun `first returns first item`() = runTest {
-            val result = Many.items(1, 2, 3).first()
-            assertIs<Success<Int>>(result)
-            assertEquals(1, result.value)
+        fun `first returns first item`() {
+            Verify.that(Many.items(1, 2, 3).first())
+                .assertNext { assertEquals(1, it) }
+                .completesNormally()
         }
 
         @Test
-        fun `first on empty returns NoSuchElementException`() = runTest {
-            val result = Many.empty<Int>().first()
-            assertIs<Failure<AelvException>>(result)
-            assertIs<NoSuchElementException>(result.value)
+        fun `first on empty returns NoSuchElementException`() {
+            Verify.that(Many.empty<Int>().first())
+                .failedWith<NoSuchElementException>()
         }
 
         @Test
-        fun `last returns last item`() = runTest {
-            val result = Many.items(1, 2, 3).last()
-            assertIs<Success<Int>>(result)
-            assertEquals(3, result.value)
+        fun `last returns last item`() {
+            Verify.that(Many.items(1, 2, 3).last())
+                .assertNext { assertEquals(3, it) }
+                .completesNormally()
         }
 
         @Test
@@ -519,8 +517,7 @@ class OperatorsTest {
                 .groupBy({ it % 2 }) { _, group -> group }
                 .take(1))
                 .emitsCount(1)
-                .thenCancels()
-                .verify()
+                .completesNormally()
         }
 
         @Test
@@ -580,7 +577,8 @@ class OperatorsTest {
         fun `switchMap propagates source error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).switchMap { Many.items(it) })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -660,7 +658,8 @@ class OperatorsTest {
         fun `delaySubscription propagates trigger error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.items(1, 2).delaySubscription(Many.error<Unit>(cause)))
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -710,7 +709,8 @@ class OperatorsTest {
         fun `onBackpressureDrop propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).onBackpressureDrop())
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -756,7 +756,8 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             var terminal: Signal.Terminal? = null
             Verify.that(Many.error<Int>(cause).doFinally { terminal = it })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
             assertIs<Signal.Upstream.Error>(terminal)
         }
 
@@ -832,14 +833,16 @@ class OperatorsTest {
         fun `zip propagates error from first source`() {
             val cause = InvalidDemandException(-1)
             Verify.that(zip(One.error<Int>(cause), One.single("a")) { n, s -> "$n$s" })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
         fun `zip propagates error from second source`() {
             val cause = InvalidDemandException(-1)
             Verify.that(zip(One.single(1), One.error<String>(cause)) { n, s -> "$n$s" })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -863,7 +866,8 @@ class OperatorsTest {
         fun `flatMapNone propagates error from One`() {
             val cause = InvalidDemandException(-1)
             Verify.that(One.error<Int>(cause).flatMapNone { None.complete<Unit>() })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -918,14 +922,15 @@ class OperatorsTest {
         @Test
         fun `reduce on empty returns NoSuchElementException`() {
             Verify.that(Many.empty<Int>().reduce { a, b -> a + b })
-                .failed()
+                .failedWith<NoSuchElementException>()
         }
 
         @Test
         fun `reduce propagates source error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).reduce { a, b -> a + b })
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -1028,7 +1033,7 @@ class OperatorsTest {
             val sink  = Sinks.broadcast<Int>()
             sink.error(cause)
 
-            Verify.that(sink.asMany()).failed()
+            Verify.that(sink.asMany()).failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -1071,7 +1076,8 @@ class OperatorsTest {
         fun `Maybe retry exhausts and propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Maybe.error<Int>(cause).retry(times = 2))
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -1104,20 +1110,23 @@ class OperatorsTest {
         fun `None retry exhausts and propagates error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(None.error<Unit>(cause).retry(times = 2))
-                .failed()
+
+                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
     class CancelSemantics {
 
         @Test
-        fun `take 0 aborts upstream`() {
+        fun `aborted pipeline does not deliver items`() {
             Verify.that(Many.items(1, 2, 3)).aborted()
         }
 
         @Test
-        fun `normal completion`() {
-            Verify.that(Many.items(1, 2, 3)).completed()
+        fun `completed pipeline delivers all items`() {
+            Verify.that(Many.items(1, 2, 3))
+                .emitsNext(1, 2, 3)
+                .completed()
         }
     }
 }

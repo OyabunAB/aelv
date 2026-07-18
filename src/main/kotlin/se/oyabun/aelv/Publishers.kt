@@ -54,7 +54,6 @@ internal sealed interface Fusion<out T : Any> {
  * giving O(1) stack depth for arbitrary operator chains. The [Fusion] fast path
  * is used when the entire chain is fused, bypassing the interpreter entirely.
  */
-@Suppress("EXPOSED_SUPER_CLASS")
 class Many<T : Any> private constructor(
     override val step: Step<T>,
     internal val fusion: Fusion<T> = Fusion.None,
@@ -241,7 +240,6 @@ class Many<T : Any> private constructor(
  * If the source emits zero items the subscriber receives only `onComplete` without `onNext`.
  * If it emits more than one item, all items after the first are silently consumed.
  */
-@Suppress("EXPOSED_SUPER_CLASS")
 class One<T : Any> private constructor(
     override val step: Step<T>,
 ) : Publisher<T>, Observable<T, One<T>>() {
@@ -351,7 +349,6 @@ class One<T : Any> private constructor(
  * If no value is available it calls [onComplete] directly without calling [onNext].
  * On error it calls [onError] instead of [onComplete].
  */
-@Suppress("EXPOSED_SUPER_CLASS")
 class Maybe<T : Any> internal constructor(
     override val step: Step<T>,
 ) : Publisher<T>, Observable<T, Maybe<T>>() {
@@ -439,7 +436,6 @@ class Maybe<T : Any> internal constructor(
  * The type parameter [T] exists only for type-system compatibility and carries no values.
  * Use `None<Unit>` when the type is irrelevant.
  */
-@Suppress("EXPOSED_SUPER_CLASS")
 class None<T : Any> private constructor(
     override val step: Step<T>,
 ) : Publisher<Nothing>, Observable<T, None<T>>() {

@@ -22,27 +22,28 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-class Verify<T : Any> private constructor(
-    private val pipeline: Many<T>,
+class Verify<T : Any, S : Observable<T, S>> private constructor(
+    private val source:   S,
+    private val pipeline: Observable<T, *>,
     private val context:  CoroutineContext = EmptyCoroutineContext,
-    private val terminal: (Many<T>) -> One<Unit> = { many ->
-        many.discard().thenReturn(Unit)
-    },
 ) {
 
-    fun assertNext(assertion: (T) -> Unit): Verify<T> =
+    fun assertNext(assertion: (T) -> Unit): Verify<T, S> =
         Verify(
-            pipeline.firstMaybe()
+            source,
+            pipeline.toMany()
+                .firstMaybe()
                 .or { error("expected at least one item but stream was empty") }
                 .map { value -> assertion(value); value }
                 .toMany(),
             context,
-            terminal,
         )
 
-    fun emitsNext(vararg values: T): Verify<T> =
+    fun emitsNext(vararg values: T): Verify<T, S> =
         Verify(
-            pipeline.take(values.size.toLong())
+            source,
+            pipeline.toMany()
+                .take(values.size.toLong())
                 .fold(emptyList<T>()) { acc, item -> acc + item }
                 .map { actual ->
                     check(actual == values.toList()) { "expected ${values.toList()} but got $actual" }
@@ -50,31 +51,34 @@ class Verify<T : Any> private constructor(
                 }
                 .flatMapMany { Many.empty() },
             context,
-            terminal,
         )
 
-    fun emitsCount(count: Long): Verify<T> =
+    fun emitsCount(count: Long): Verify<T, S> =
         Verify(
-            pipeline.fold(0L) { acc, _ -> acc + 1 }
+            source,
+            pipeline.toMany()
+                .fold(0L) { acc, _ -> acc + 1 }
                 .map { actual -> check(actual == count) { "expected $count items but got $actual" }; actual }
                 .flatMapMany { Many.empty() },
             context,
-            terminal,
         )
-
-    fun thenCancels(): Verify<T> = Verify(pipeline.take(0), context, terminal)
 
     private fun terminatesWith(expected: Signal.Terminal, within: Duration) {
         var signal: Signal.Terminal? = null
-        val observed = pipeline.doFinally { signal = it }.let {
-            if (expected is Signal.Downstream.Cancel) it.take(0) else it
-        }
+        val observed: Observable<T, *> = source.doFinally { signal = it }
         val result = runBlocking(context + CoroutineName("verify")) {
-            terminal(Verify(observed, context, terminal).pipeline).await(within)
+            if (expected is Signal.Downstream.Cancel) {
+                observed.toMany().take(0).discard().thenReturn(Unit).await(within)
+            } else {
+                observed.discard().thenReturn(Unit).await(within)
+            }
         }
         when (expected) {
-            is Signal.Upstream.Error   -> check(result is Failure) { "expected error but stream completed normally" }
-            else                       -> check(result is Success) { "expected normal completion but got error: ${(result as Failure).value.message}" }
+            is Signal.Upstream.Error -> if (result is Success) throw AssertionError("expected error but stream completed normally")
+            else -> result.fold(
+                onLeft  = { throw AssertionError("expected normal termination but got error: ${it.message}", it) },
+                onRight = { },
+            )
         }
         check(signal == expected) { "expected terminal $expected but got: $signal" }
     }
@@ -84,7 +88,7 @@ class Verify<T : Any> private constructor(
 
     fun failed(within: Duration = DEFAULT_TIMEOUT) {
         val result = runBlocking(context + CoroutineName("verify")) {
-            terminal(pipeline).await(within)
+            source.discard().thenReturn(Unit).await(within)
         }
         if (result is Success) throw AssertionError("expected error but stream completed normally")
     }
@@ -95,7 +99,7 @@ class Verify<T : Any> private constructor(
     @Suppress("UNCHECKED_CAST")
     fun <X : Exception> failedWith(type: Class<X>, within: Duration = DEFAULT_TIMEOUT, assertions: (X) -> Unit = {}) {
         val result = runBlocking(context + CoroutineName("verify")) {
-            terminal(pipeline).await(within)
+            source.discard().thenReturn(Unit).await(within)
         }
         if (result is Success) throw AssertionError("expected error but stream completed normally")
         val cause = (result as Failure).value
@@ -104,7 +108,7 @@ class Verify<T : Any> private constructor(
     }
 
     fun completesEmpty(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
-        pipeline
+        source.toMany()
             .flatMapNone { value: T -> None.error<T>(IllegalStateException("expected empty but got: $value")) }
             .thenReturn(Unit)
             .await(within)
@@ -115,7 +119,7 @@ class Verify<T : Any> private constructor(
     }
 
     fun completesNormally(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
-        terminal(pipeline).await(within).fold(
+        pipeline.discard().thenReturn(Unit).await(within).fold(
             onLeft  = { throw AssertionError("expected normal completion but got error: ${it.message}", it) },
             onRight = { },
         )
@@ -126,53 +130,9 @@ class Verify<T : Any> private constructor(
     companion object {
         val DEFAULT_TIMEOUT = 5.seconds
 
-        fun <T : Any> that(
-            pipeline: Many<T>,
-            context:  CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(pipeline, context)
-
-        fun <T : Any> that(
-            one:     One<T>,
+        fun <T : Any, S : Observable<T, S>> that(
+            source:  S,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(
-            pipeline = one.toMany(),
-            context  = context,
-            terminal = { _ -> one.map { Unit } },
-        )
-
-        fun <T : Any> that(
-            maybe:   Maybe<T>,
-            context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(
-            pipeline = maybe.toMany(),
-            context  = context,
-            terminal = { pipeline ->
-                One.generate { emit ->
-                    val assertResult = pipeline.discard().thenReturn(Unit).await()
-                    if (assertResult is Failure) { emit(Signal.Upstream.Error(assertResult.value)); emit(Signal.Upstream.Complete); return@generate }
-                    var completed = false
-                    var error: Exception? = null
-                    maybe.source(
-                        { Signal.Downstream.Request },
-                        { completed = true },
-                        { issue -> error = issue },
-                    )
-                    when {
-                        error != null -> { emit(Signal.Upstream.Error(error)); emit(Signal.Upstream.Complete) }
-                        completed     -> { emit(Signal.Upstream.Next(Unit)); emit(Signal.Upstream.Complete) }
-                        else          -> emit(Signal.Upstream.Error(IllegalStateException("Maybe completed without signalling onComplete")))
-                    }
-                }
-            },
-        )
-
-        fun <T : Any> that(
-            none:    None<T>,
-            context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(
-            pipeline = none.toMany(),
-            context  = context,
-            terminal = { _ -> none.thenReturn(Unit) },
-        )
+        ): Verify<T, S> = Verify(source, source, context)
     }
 }

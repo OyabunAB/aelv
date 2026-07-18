@@ -42,7 +42,7 @@ sealed interface Source<out T : Any>
  * [Self] is the concrete subtype. [wrap] constructs a new [Self] from a [Step.Suspend] node,
  * which is the escape hatch for operators that cannot be expressed as structural [Step] nodes.
  */
-internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
+abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
 
     internal abstract val step: Step<T>
 

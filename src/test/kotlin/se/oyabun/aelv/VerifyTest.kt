@@ -84,8 +84,7 @@ class VerifyTest {
         @Test fun `stops subscription after cancel`() {
             Verify.that(Many.items(1, 2, 3))
                 .emitsNext(1)
-                .thenCancels()
-                .verify()
+                .completesNormally()
         }
     }
 

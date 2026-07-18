@@ -198,30 +198,26 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
  * Returns [Either.Right] with the first item, or [Either.Left] with [NoSuchElementException]
  * if the stream was empty, or with the upstream error if the stream errored.
  */
-suspend fun <T : Any> Many<T>.first(): Either<Exception, T> {
-    var result: Either<Unset, T> = Unset.left()
-    val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
-    val final = result
-    return when {
-        final  is Success -> final.value.right()
-        outcome is Failure -> outcome
-        else                   -> NoSuchElementException().left()
+fun <T : Any> Many<T>.first(): One<T> =
+    One.generate { emit ->
+        var result: Either<Unset, T> = Unset.left()
+        val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
+        val final = result
+        when {
+            final   is Success -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
+            outcome is Failure -> emit(Signal.Upstream.Error(outcome.value))
+            else               -> emit(Signal.Upstream.Error(NoSuchElementException()))
+        }
     }
-}
 
-/**
- * Suspends until the stream completes then returns the last emitted item.
- *
- * Returns [Either.Right] with the last item, or [Either.Left] with [NoSuchElementException]
- * if the stream was empty, or with the upstream error if the stream errored.
- */
-suspend fun <T : Any> Many<T>.last(): Either<Exception, T> {
-    var result: Either<Unset, T> = Unset.left()
-    val outcome = collect { value -> result = value.right(); Signal.Downstream.Request }
-    val final = result
-    return when {
-        final  is Success -> final.value.right()
-        outcome is Failure -> outcome
-        else                   -> NoSuchElementException().left()
+fun <T : Any> Many<T>.last(): One<T> =
+    One.generate { emit ->
+        var result: Either<Unset, T> = Unset.left()
+        val outcome = collect { value -> result = value.right(); Signal.Downstream.Request }
+        val final = result
+        when {
+            final   is Success -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
+            outcome is Failure -> emit(Signal.Upstream.Error(outcome.value))
+            else               -> emit(Signal.Upstream.Error(NoSuchElementException()))
+        }
     }
-}

@@ -112,6 +112,6 @@ class UnicastSinkTest {
         sink.error(RuntimeException("oops"))
         sink.emit(99)
 
-        Verify.that(sink.asMany()).failed()
+        Verify.that(sink.asMany()).failedWith<RuntimeException> { assertEquals("oops", it.message) }
     }
 }
