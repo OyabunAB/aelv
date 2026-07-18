@@ -15,6 +15,7 @@
  */
 package se.oyabun.aelv
 
+import com.sun.jdi.request.InvalidRequestStateException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -1023,15 +1024,20 @@ class OperatorsTest {
 
         @Test
         fun `Maybe retry retries on error then succeeds`() = runTest {
-            var attempts = 0
-            Verify.that(Maybe.defer {
-                attempts++
-                if (attempts < 3) throw InvalidDemandException(-1)
+            var attempt = 0
+            var retryCount = 0
+            val threeThrowsThenSuccessAreRetried = Maybe.defer {
+                attempt++
+                if (attempt < 3) throw InvalidDemandException(-1)
                 42
-            }.retry(times = 3))
-                .assertNext { assertEquals(42, it) }
+            }.doOnRetry { _, _ -> retryCount++ }.retry(times = 3)
+            Verify.that(threeThrowsThenSuccessAreRetried)
+                .assertNext {
+                    assertEquals(42, it)
+                    assertEquals(3, attempt)
+                    assertEquals(2, retryCount)
+                }
                 .completesNormally()
-            assertEquals(3, attempts)
         }
 
         @Test
@@ -1039,6 +1045,18 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Maybe.error<Int>(cause).retry(times = 2))
                 .completesWithError()
+        }
+
+        @Test
+        fun `Maybe retry signals onComplete to direct subscriber after successful retry`() = runTest {
+            var retries = 0
+            var completed = false
+            val signalsCompleteAfterRetries = Maybe.defer { if (retries < 1) throw InvalidDemandException(-1) }
+                .doOnRetry { _,_ -> retries++ }.retry(times = 1)
+                .doOnComplete { if(!completed) completed = true else throw IllegalStateException("only once") }
+            Verify.that(signalsCompleteAfterRetries).completesNormally()
+            assertTrue(completed, "onComplete must be signalled to direct subscribers after successful retry")
+            assertEquals(1, retries)
         }
     }
 

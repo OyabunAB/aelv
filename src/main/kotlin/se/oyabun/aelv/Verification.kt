@@ -26,8 +26,9 @@ import kotlin.time.Duration.Companion.seconds
  * Pipeline-based verifier for aelv publishers.
  *
  * Each step returns a new [Verify] wrapping a transformed pipeline.
- * The terminal methods require an explicit [within] duration — how long
- * this specific assertion is expected to complete in.
+ * Terminal methods subscribe through the original publisher type so that
+ * missing terminal signals (e.g. a [Maybe] that never calls onComplete) are
+ * detected rather than masked by type conversions.
  *
  * ```kotlin
  * Verify.that(pipeline)
@@ -38,6 +39,13 @@ import kotlin.time.Duration.Companion.seconds
 class Verify<T : Any> private constructor(
     private val pipeline: Many<T>,
     private val context:  CoroutineContext = EmptyCoroutineContext,
+    // Executes the terminal subscription and returns a One<Unit> that resolves
+    // on completion or fails with the stream error.  Defaults to the Many pipeline;
+    // overridden for One/Maybe/None so their terminal signals are tested on the
+    // source type directly rather than through a type-conversion wrapper.
+    private val terminal: (Many<T>) -> One<Unit> = { many ->
+        many.discard().thenReturn(Unit)
+    },
 ) {
 
     fun assertNext(assertion: (T) -> Unit): Verify<T> =
@@ -47,6 +55,7 @@ class Verify<T : Any> private constructor(
                 .map { value -> assertion(value); value }
                 .toMany(),
             context,
+            terminal,
         )
 
     fun emitsNext(vararg values: T): Verify<T> =
@@ -59,6 +68,7 @@ class Verify<T : Any> private constructor(
                 }
                 .flatMapMany { Many.empty() },
             context,
+            terminal,
         )
 
     fun emitsCount(count: Long): Verify<T> =
@@ -67,9 +77,10 @@ class Verify<T : Any> private constructor(
                 .map { actual -> check(actual == count) { "expected $count items but got $actual" }; actual }
                 .flatMapMany { Many.empty() },
             context,
+            terminal,
         )
 
-    fun thenCancels(): Verify<T> = Verify(pipeline.take(0), context)
+    fun thenCancels(): Verify<T> = Verify(pipeline.take(0), context, terminal)
 
     fun completesEmpty(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
         pipeline
@@ -83,14 +94,14 @@ class Verify<T : Any> private constructor(
     }
 
     fun completesNormally(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
-        pipeline.discard().thenReturn(Unit).await(within).fold(
+        terminal(pipeline).await(within).fold(
             onLeft  = { throw AssertionError("expected normal completion but got error: ${it.message}", it) },
             onRight = { },
         )
     }
 
     fun completesWithError(within: Duration = DEFAULT_TIMEOUT): Exception = runBlocking(context + CoroutineName("verify")) {
-        pipeline.discard().thenReturn(Unit).await(within).fold(
+        terminal(pipeline).await(within).fold(
             onLeft  = { it },
             onRight = { throw AssertionError("expected error but stream completed normally") },
         )
@@ -100,6 +111,7 @@ class Verify<T : Any> private constructor(
 
     companion object {
         val DEFAULT_TIMEOUT = 5.seconds
+
         fun <T : Any> that(
             pipeline: Many<T>,
             context:  CoroutineContext = EmptyCoroutineContext,
@@ -108,18 +120,48 @@ class Verify<T : Any> private constructor(
         fun <T : Any> that(
             one:     One<T>,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(one.toMany(), context)
+        ): Verify<T> = Verify(
+            pipeline = one.toMany(),
+            context  = context,
+            terminal = { _ -> one.map { Unit } },
+        )
 
         fun <T : Any> that(
             maybe:   Maybe<T>,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(maybe.toMany(), context)
+        ): Verify<T> = Verify(
+            pipeline = maybe.toMany(),
+            context  = context,
+            terminal = { pipeline ->
+                // Step 1: run intermediate pipeline assertions via the Many pipeline.
+                // Step 2: re-subscribe to the Maybe directly to verify its terminal signal.
+                // Cold sources produce fresh state on each subscription, so this is correct.
+                One.generate { emit ->
+                    val assertResult = pipeline.discard().thenReturn(Unit).await()
+                    if (assertResult is Failure) { emit(Signal.Upstream.Error(assertResult.value)); emit(Signal.Upstream.Complete); return@generate }
+                    var completed = false
+                    var error: Exception? = null
+                    maybe.source(
+                        { Signal.Downstream.Request },
+                        { completed = true },
+                        { issue -> error = issue },
+                    )
+                    when {
+                        error != null -> { emit(Signal.Upstream.Error(error)); emit(Signal.Upstream.Complete) }
+                        completed     -> { emit(Signal.Upstream.Next(Unit)); emit(Signal.Upstream.Complete) }
+                        else          -> emit(Signal.Upstream.Error(IllegalStateException("Maybe completed without signalling onComplete")))
+                    }
+                }
+            },
+        )
 
         fun <T : Any> that(
             none:    None<T>,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T> = Verify(none.toMany(), context)
+        ): Verify<T> = Verify(
+            pipeline = none.toMany(),
+            context  = context,
+            terminal = { _ -> none.thenReturn(Unit) },
+        )
     }
 }
-
-

@@ -416,7 +416,7 @@ fun <T : Any> Maybe<T>.retry(policy: Policy.Retry): Maybe<T> =
         while (true) {
             val result = collect { onNext(it) }
             when {
-                result is Success                               -> break
+                result is Success                               -> { onComplete(); return@Maybe }
                 !policy.filter((result as Either.Left).value)  -> { onError(result.value); return@Maybe }
                 attempts >= policy.maxAttempts                 -> { log.operator.retryExhausted("retry", result.value); onError(result.value); return@Maybe }
                 else -> {
@@ -427,4 +427,41 @@ fun <T : Any> Maybe<T>.retry(policy: Policy.Retry): Maybe<T> =
                 }
             }
         }
+    }
+/**
+ * Invokes [action] with the attempt number and cause before each retry.
+ *
+ * Compose before [retry] to observe retry attempts without shared mutable state:
+ * ```kotlin
+ * Maybe.defer { fetchData() }
+ *     .doOnRetry { attempt, cause -> log.warn("retry $attempt: ${cause.message}") }
+ *     .retry(times = 3)
+ * ```
+ */
+fun <T : Any> Maybe<T>.doOnRetry(action: (attempt: Long, cause: Exception) -> Unit): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        var attempt = 0L
+        source(
+            onNext,
+            onComplete,
+            { cause ->
+                runCatching { action(attempt++, cause) }.onFailure { e -> log.operator.sideEffectThrew("doOnRetry", e) }
+                onError(cause)
+            },
+        )
+    }
+
+/** Suspend variant of [doOnRetry]. */
+@LowPriorityInOverloadResolution
+fun <T : Any> Maybe<T>.doOnRetry(action: suspend (attempt: Long, cause: Exception) -> Unit): Maybe<T> =
+    Maybe { onNext, onComplete, onError ->
+        var attempt = 0L
+        source(
+            onNext,
+            onComplete,
+            { cause ->
+                runCatching { action(attempt++, cause) }.onFailure { e -> log.operator.sideEffectThrew("doOnRetry", e) }
+                onError(cause)
+            },
+        )
     }
