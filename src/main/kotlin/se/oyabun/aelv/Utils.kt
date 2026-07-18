@@ -20,12 +20,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 
 internal object Unset
 
-internal fun Any.isUnset(): Boolean  = this === Unset
 internal fun Any.notUnset(): Boolean = this !== Unset
 
 internal fun Any.isError(): Boolean = this is Exception
@@ -38,9 +36,6 @@ fun Exception.leftUnlessCancelled(): Either<Exception, Nothing> =
 
 internal suspend fun <T> Flow<T>.collectCancelling(block: suspend (T) -> Boolean) =
     try { coroutineScope { collect { if (!block(it)) cancel() } } } catch (_: CancellationException) {}
-
-internal suspend fun <T> SendChannel<T>.sendOrDiscard(value: T) =
-    try { send(value) } catch (_: ClosedSendChannelException) {}
 
 internal suspend inline fun <C : AutoCloseable, V> C.using(block: suspend (C) -> V): V =
     try { block(this) } finally { close() }
