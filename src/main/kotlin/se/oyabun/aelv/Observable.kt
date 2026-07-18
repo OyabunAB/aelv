@@ -173,13 +173,15 @@ internal abstract class Observable<T : Any, Self : Observable<T, Self>> : Source
     fun retry(policy: Policy.Retry): Self = wrap { onNext, onComplete, onError ->
         var attempts = 0L
         while (true) {
-            val result = Either.catching { source(onNext, onComplete, onError) }
+            var caught: Exception? = null
+            source(onNext, { }, { e -> caught = e })
+            val error = caught
             when {
-                result is Success                          -> { onComplete(); return@wrap }
-                !policy.filter((result as Failure).value) -> { onError(result.value); return@wrap }
-                attempts >= policy.maxAttempts            -> { log.operator.retryExhausted("retry", result.value); onError(result.value); return@wrap }
+                error == null                     -> { onComplete(); return@wrap }
+                !policy.filter(error)             -> { onError(error); return@wrap }
+                attempts >= policy.maxAttempts    -> { log.operator.retryExhausted("retry", error); onError(error); return@wrap }
                 else -> {
-                    log.operator.retrying("retry", attempts, result.value)
+                    log.operator.retrying("retry", attempts, error)
                     val backoffDelay = policy.backoff.delayFor(attempts)
                     if (backoffDelay.isPositive()) delay(backoffDelay)
                     attempts++
