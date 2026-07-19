@@ -13,15 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
 @file:OptIn(ExperimentalTypeInference::class)
 package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
+import kotlin.internal.LowPriorityInOverloadResolution
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.CoroutineContext
@@ -30,6 +33,13 @@ import org.reactivestreams.Publisher
 
 private val log = Logging.of<One<*>>()
 
+fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> {
+    val currentFusion = fusion
+    return One.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
+}
+
+/** Suspend variant of [map] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
     One.generate { emit ->
         source(
@@ -107,6 +117,13 @@ fun <T : Any> One<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
  * [Exception] if the source errored or completed without emitting.
  */
 suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
+    val currentFusion = fusion
+    if (currentFusion is Fusion.Available) {
+        val poll = currentFusion.create(kotlin.coroutines.EmptyCoroutineContext)
+        if (poll != null) return try {
+            (poll.poll() ?: throw NoSuchElementException()).right()
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { e.left() }
+    }
     var result: Either<Unset, T> = Unset.left()
     val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
     val final = result

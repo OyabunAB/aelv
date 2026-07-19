@@ -198,17 +198,22 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
  * Returns [Either.Right] with the first item, or [Either.Left] with [NoSuchElementException]
  * if the stream was empty, or with the upstream error if the stream errored.
  */
-fun <T : Any> Many<T>.first(): One<T> =
-    One.generate { emit ->
-        var result: Either<Unset, T> = Unset.left()
-        val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
-        val final = result
-        when {
-            final   is Success -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
-            outcome is Failure -> emit(Signal.Upstream.Error(outcome.value))
-            else               -> emit(Signal.Upstream.Error(NoSuchElementException()))
-        }
-    }
+fun <T : Any> Many<T>.first(): One<T> {
+    val currentFusion = fusion
+    return One.fromStep(
+        step = Step.Suspend { onNext, onComplete, onError ->
+            var result: Either<Unset, T> = Unset.left()
+            val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
+            val final = result
+            when {
+                final   is Success -> { onNext(final.value); onComplete() }
+                outcome is Failure -> onError(outcome.value)
+                else               -> onError(NoSuchElementException())
+            }
+        },
+        fusion = if (currentFusion is Fusion.Available) TakeFusion(currentFusion, 1) else Fusion.None,
+    )
+}
 
 fun <T : Any> Many<T>.last(): One<T> =
     One.generate { emit ->

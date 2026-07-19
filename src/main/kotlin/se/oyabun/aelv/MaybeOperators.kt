@@ -13,11 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
 @file:OptIn(ExperimentalTypeInference::class)
 package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
+import kotlin.internal.LowPriorityInOverloadResolution
 import kotlin.time.Duration
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -26,6 +29,13 @@ import org.reactivestreams.Publisher
 
 private val log = Logging.of<Maybe<*>>()
 
+fun <T : Any, R : Any> Maybe<T>.map(transform: (T) -> R): Maybe<R> {
+    val currentFusion = fusion
+    return Maybe.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
+}
+
+/** Suspend variant of [map] — [transform] may call suspend functions. */
+@LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -36,6 +46,13 @@ fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
     }
 
 /** Keeps the value if [predicate] returns true, otherwise produces an empty [Maybe]. */
+fun <T : Any> Maybe<T>.filter(predicate: (T) -> Boolean): Maybe<T> {
+    val currentFusion = fusion
+    return Maybe.fromStep(Step.Filter(step, predicate), if (currentFusion is Fusion.Available) FilterFusion(currentFusion, predicate) else Fusion.None)
+}
+
+/** Suspend variant of [filter]. */
+@LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
     Maybe { onNext, onComplete, onError ->
         source(
@@ -146,12 +163,21 @@ fun <T : Any> Maybe<T>.toOne(): One<T> =
         result ?: throw NoSuchElementException()
     }
 
-suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> = Either.catching {
-    var result: T? = null
-    source(
-        { value -> result = value; Signal.Downstream.Cancel },
-        { },
-        ::rethrow,
-    )
-    result
+suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> {
+    val currentFusion = fusion
+    if (currentFusion is Fusion.Available) {
+        val poll = currentFusion.create(kotlin.coroutines.EmptyCoroutineContext)
+        if (poll != null) return try {
+            poll.poll().right()
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { e.left() }
+    }
+    return Either.catching {
+        var result: T? = null
+        source(
+            { value -> result = value; Signal.Downstream.Cancel },
+            { },
+            ::rethrow,
+        )
+        result
+    }
 }

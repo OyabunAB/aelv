@@ -156,6 +156,34 @@ class PublishersTest {
             })
                 .failedWith<RuntimeException> { assertEquals("expected error", it.message) }
         }
+
+        @Test
+        fun `map uses fusion fast path on fused source`() = runTest {
+            val result = Many.items(1, 2, 3).first().map { it * 10 }.await()
+            assertIs<Success<Int>>(result)
+            assertEquals(10, result.value)
+        }
+
+        @Test
+        fun `toMany propagates fusion`() = runTest {
+            val result = Many.range(1, 5).first().map { it + 100 }.toMany().toList().await()
+            assertIs<Success<List<Int>>>(result)
+            assertEquals(listOf(101), result.value)
+        }
+
+        @Test
+        fun `await uses fusion fast path on fused source`() = runTest {
+            val result = Many.items(42).first().await()
+            assertIs<Success<Int>>(result)
+            assertEquals(42, result.value)
+        }
+
+        @Test
+        fun `await returns NoSuchElementException on empty fused source`() = runTest {
+            val result = Many.empty<Int>().first().map { it }.await()
+            assertIs<Failure<Exception>>(result)
+            assertIs<NoSuchElementException>(result.value)
+        }
     }
 
     class NoneTest {

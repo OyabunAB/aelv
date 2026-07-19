@@ -186,9 +186,9 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
 
     fun discard(): None<T> = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }
 
-    fun toMany(): Many<T> = Many.fromStep(step)
+    open fun toMany(): Many<T> = Many.fromStep(step)
 
-    fun toMaybe(): Maybe<T> = Maybe(step)
+    open fun toMaybe(): Maybe<T> = Maybe(step)
 
     fun <R : Any> thenReturn(value: R): One<R> = discard().then { One.single(value) }
 

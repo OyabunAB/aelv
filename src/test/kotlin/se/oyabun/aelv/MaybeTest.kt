@@ -242,4 +242,35 @@ class MaybeTest {
                 .completesNormally()
         }
     }
+
+    class FusionTest {
+
+        @Test fun `map uses fusion fast path on fused source`() = runTest {
+            val result = Many.items(7).toMaybe().map { it * 3 }.await()
+            assertIs<Success<Int?>>(result)
+            assertEquals(21, result.value)
+        }
+
+        @Test fun `filter uses fusion fast path on fused source`() = runTest {
+            val present = Many.items(5).toMaybe().filter { it > 0 }.await()
+            assertIs<Success<Int?>>(present)
+            assertEquals(5, present.value)
+
+            val absent = Many.items(5).toMaybe().filter { it > 10 }.await()
+            assertIs<Success<Int?>>(absent)
+            assertNull(absent.value)
+        }
+
+        @Test fun `await returns null for empty fused source`() = runTest {
+            val result = Many.empty<Int>().toMaybe().await()
+            assertIs<Success<Int?>>(result)
+            assertNull(result.value)
+        }
+
+        @Test fun `toMany propagates fusion`() = runTest {
+            val result = Many.range(1, 3).toMaybe().map { it * 2 }.toMany().toList().await()
+            assertIs<Success<List<Int>>>(result)
+            assertEquals(listOf(2), result.value)
+        }
+    }
 }

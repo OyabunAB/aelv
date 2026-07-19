@@ -67,6 +67,9 @@ class Many<T : Any> private constructor(
         ) -> Unit,
     ): Many<T> = Many.fused(block = block)
 
+    override fun toMany(): Many<T> = this
+    override fun toMaybe(): Maybe<T> = Maybe.fromStep(step, fusion)
+
     override fun subscribe(subscriber: Subscriber<in T>) {
         val subscription = StreamSubscription(subscriber, ::source)
         subscription.deliverSubscription(subscriber, subscription::cancel, subscription::onSubscribeComplete)
@@ -242,6 +245,7 @@ class Many<T : Any> private constructor(
  */
 class One<T : Any> private constructor(
     override val step: Step<T>,
+    internal val fusion: Fusion<T> = Fusion.None,
 ) : Publisher<T>, Observable<T, One<T>>() {
 
     override fun wrap(
@@ -251,6 +255,9 @@ class One<T : Any> private constructor(
             onError:    suspend (Exception) -> Unit,
         ) -> Unit,
     ): One<T> = One(Step.Suspend(block))
+
+    override fun toMany(): Many<T> = Many.fromStep(step, fusion)
+    override fun toMaybe(): Maybe<T> = Maybe.fromStep(step, fusion)
 
     override fun subscribe(subscriber: Subscriber<in T>) {
         val subscription = StreamSubscription(subscriber, ::source)
@@ -323,6 +330,8 @@ class One<T : Any> private constructor(
 
         fun <T : Any> pipelineFrom(): One<T> = One(Step.PipelineSource())
 
+        internal fun <T : Any> fromStep(step: Step<T>, fusion: Fusion<T> = Fusion.None): One<T> = One(step, fusion)
+
         fun <T : Any> create(block: (success: (T) -> Unit, failure: (Exception) -> Unit) -> Unit): One<T> =
             One.generate { emit ->
                 val result = suspendCancellableCoroutine<Either<Exception, T>> { continuation ->
@@ -357,6 +366,7 @@ class One<T : Any> private constructor(
  */
 class Maybe<T : Any> internal constructor(
     override val step: Step<T>,
+    internal val fusion: Fusion<T> = Fusion.None,
 ) : Publisher<T>, Observable<T, Maybe<T>>() {
 
     override fun wrap(
@@ -366,6 +376,8 @@ class Maybe<T : Any> internal constructor(
             onError:    suspend (Exception) -> Unit,
         ) -> Unit,
     ): Maybe<T> = Maybe(Step.Suspend(block))
+
+    override fun toMany(): Many<T> = Many.fromStep(step, fusion)
 
     override fun subscribe(subscriber: Subscriber<in T>) {
         val subscription = StreamSubscription(subscriber, ::source)
@@ -433,6 +445,9 @@ class Maybe<T : Any> internal constructor(
                 onError:    suspend (Exception) -> Unit,
             ) -> Unit,
         ): Maybe<T> = Maybe(Step.Suspend(block))
+
+        internal fun <T : Any> fromStep(step: Step<T>, fusion: Fusion<T> = Fusion.None): Maybe<T> =
+            Maybe(step, if (fusion is Fusion.Available) TakeFusion(fusion, 1) else fusion)
     }
 }
 
