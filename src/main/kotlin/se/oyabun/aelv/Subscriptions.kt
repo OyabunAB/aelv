@@ -63,15 +63,15 @@ internal class StreamSubscription<T : Any>(
     private val log  = Logging.of<StreamSubscription<*>>()
     private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
-    private val demand          = AtomicLong(0L)
-    private val signal          = Channel<Unit>(Channel.UNLIMITED)
-    private val subscribeGate   = Channel<Unit>(Channel.CONFLATED)
-    private val terminated      = AtomicBoolean(false)
-    private val started         = AtomicBoolean(false)
-    private val producer        = AtomicReference(noopJob)
+    private val demand     = AtomicLong(0L)
+    private val signal     by lazy { Channel<Unit>(Channel.UNLIMITED) }  // only allocated for bounded demand
+    private val terminated = AtomicBoolean(false)
+    private val started    = AtomicBoolean(false)
+    private val producer   = AtomicReference(noopJob)
 
     internal fun onSubscribeComplete() {
-        subscribeGate.trySend(Unit)
+        // onSubscribe has returned — safe to start the producer now (RS §1.3: serial signals)
+        if (started.compareAndSet(false, true)) start()
     }
 
     private fun start() {
@@ -84,39 +84,52 @@ internal class StreamSubscription<T : Any>(
             }
             shutdown()
         }
+        val onComplete: suspend () -> Unit = {
+            if (terminated.compareAndSet(false, true)) {
+                log.stream.completed(name)
+                subscriber.onComplete()
+            }
+            shutdown()
+        }
+        val onError: suspend (Exception) -> Unit = { cause ->
+            if (terminated.compareAndSet(false, true)) {
+                log.stream.error(name, cause)
+                subscriber.onError(cause)
+            }
+            shutdown()
+        }
         val producerJob = sharedScope.launch(exceptionHandler) {
-            subscribeGate.receive()
-            source(
-                { value ->
-                    awaitDemand()
-                    if (terminated.get()) return@source Signal.Downstream.Cancel
-                    demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
-                    subscriber.onNext(value)
-                    if (terminated.get()) Signal.Downstream.Cancel
-                    else Signal.Downstream.Request
-                },
-                {
-                    if (terminated.compareAndSet(false, true)) {
-                        log.stream.completed(name)
-                        subscriber.onComplete()
-                    }
-                    shutdown()
-                },
-                { cause ->
-                    if (terminated.compareAndSet(false, true)) {
-                        log.stream.error(name, cause)
-                        subscriber.onError(cause)
-                    }
-                    shutdown()
-                },
-            )
+            if (demand.get() == Long.MAX_VALUE) {
+                // Fast path: unbounded demand — skip awaitDemand() and CAS per item
+                source(
+                    { value ->
+                        if (terminated.get()) return@source Signal.Downstream.Cancel
+                        subscriber.onNext(value)
+                        if (terminated.get()) Signal.Downstream.Cancel else Signal.Downstream.Request
+                    },
+                    onComplete,
+                    onError,
+                )
+            } else {
+                source(
+                    { value ->
+                        awaitDemand()
+                        if (terminated.get()) return@source Signal.Downstream.Cancel
+                        demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
+                        subscriber.onNext(value)
+                        if (terminated.get()) Signal.Downstream.Cancel else Signal.Downstream.Request
+                    },
+                    onComplete,
+                    onError,
+                )
+            }
         }
         producer.set(producerJob)
         if (terminated.get()) producerJob.cancel()
     }
 
     private fun shutdown() {
-        signal.close()
+        if (demand.get() < Long.MAX_VALUE) signal.close()  // only close if it was ever allocated
     }
 
     override fun request(n: Long) {
@@ -132,8 +145,7 @@ internal class StreamSubscription<T : Any>(
         demand.updateAndGet { current ->
             if (current >= Long.MAX_VALUE / 2) Long.MAX_VALUE else current + n
         }
-        signal.trySend(Unit)
-        if (started.compareAndSet(false, true)) start()
+        if (demand.get() < Long.MAX_VALUE) signal.trySend(Unit)  // only meaningful for bounded demand
     }
 
     override fun cancel() {
@@ -163,13 +175,12 @@ internal class CompletionSubscription(
     private val log  = Logging.of<CompletionSubscription>()
     private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
-    private val subscribeGate = Channel<Unit>(Channel.CONFLATED)
     private val terminated    = AtomicBoolean(false)
     private val started       = AtomicBoolean(false)
     private val producer      = AtomicReference(noopJob)
 
     internal fun onSubscribeComplete() {
-        subscribeGate.trySend(Unit)
+        if (started.compareAndSet(false, true)) start()
     }
 
     private fun start() {
@@ -182,7 +193,6 @@ internal class CompletionSubscription(
             }
         }
         val producerJob = sharedScope.launch(exceptionHandler) {
-            subscribeGate.receive()
             source()
             if (terminated.compareAndSet(false, true)) {
                 log.stream.completed(name)
@@ -201,7 +211,6 @@ internal class CompletionSubscription(
             return
         }
         log.subscription.requested(name, n)
-        if (started.compareAndSet(false, true)) start()
     }
 
     override fun cancel() {

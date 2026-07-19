@@ -32,9 +32,9 @@ internal class Log(private val slf4j: Slf4jLogger) {
     val subscription = Subscription()
 
     inner class Stream {
-        fun subscribing(name: String) = slf4j.debug { "$name subscribing" }
-        fun completed(name: String) = slf4j.debug { "$name completed" }
-        fun cancelled(name: String) = slf4j.debug { "$name cancelled" }
+        fun subscribing(name: String) = slf4j.trace { "$name subscribing" }
+        fun completed(name: String) = slf4j.trace { "$name completed" }
+        fun cancelled(name: String) = slf4j.trace { "$name cancelled" }
         fun error(name: String, cause: Throwable) = slf4j.warn(cause) { "$name terminated with error" }
     }
 

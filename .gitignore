@@ -33,5 +33,9 @@ build/
 # Session state
 STATE.md
 jmh-result*
-se.oyabun.aelv.benchmarks.*/
+se.oyabun.*/
+_COROUTINE/
+kotlinx/
 .idea/
+DebugProbesKt.bin
+META-INF/

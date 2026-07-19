@@ -248,6 +248,12 @@ private suspend fun execSuspend(
     block(
         { item ->
             val sig = when (val node = frame) {
+                is Frame.Collect<*>     -> {
+                    // Fast path: no intermediate frames — call action directly,
+                    // avoiding the applyFrame continuation allocation per item.
+                    @Suppress("UNCHECKED_CAST")
+                    (node as Frame.Collect<Any>).action(item)
+                }
                 is Frame.ConcatBind<*, *> -> {
                     node as Frame.ConcatBind<Any, Any>
                     when (val result = interpret(node.transform(item).step, node.next)) {

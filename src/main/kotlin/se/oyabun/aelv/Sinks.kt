@@ -15,15 +15,52 @@
  */
 package se.oyabun.aelv
 
-import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.atomic.AtomicBoolean
 
-private const val DEFAULT_BUFFER = 256
+private const val DEFAULT_BUFFER     = 4096
+private const val DEFAULT_MAX_SLOW   = DEFAULT_BUFFER * 4
+
+/** Slow-path buffer for promoted subscribers. Grows freely up to [max], then rejects. */
+private class BoundedQueue<T : Any>(val max: Int) {
+    private val queue = ConcurrentLinkedQueue<T>()
+    private val count = AtomicInteger(0)
+
+    /** Returns false if the cap is reached — caller must throw. */
+    fun add(item: T): Boolean {
+        if (count.get() >= max) return false
+        queue.add(item)
+        count.incrementAndGet()
+        return true
+    }
+
+    fun poll(): T? = queue.poll()?.also { count.decrementAndGet() }
+    fun isEmpty(): Boolean = queue.isEmpty()
+}
+
+/**
+ * Per-subscriber state attached to the ring buffer.
+ *
+ * [cursor] is written only by the subscriber coroutine and read by the emitter for
+ * overflow detection. [@Volatile] provides the cross-thread visibility guarantee
+ * without the AtomicLong CAS overhead — a single writer makes CAS unnecessary.
+ *
+ * [promoted] and [slowQueue] are written under the Sink lock by [promote], and read
+ * by the subscriber coroutine (without the lock). [@Volatile] ensures visibility.
+ */
+private class SubHandle<T : Any>(writeStart: Long) {
+    @Volatile var cursor:    Long             = writeStart
+    val             wakeup:  Channel<Unit>    = Channel(Channel.CONFLATED)
+    @Volatile var waiting:   Boolean          = false   // true only while blocked in wakeup.receive()
+    @Volatile var promoted:  Boolean          = false
+    @Volatile var slowQueue: BoundedQueue<T>? = null
+}
 
 /**
  * Common interface for all aelv sink types.
@@ -41,110 +78,158 @@ interface SinkOf<T : Any, Self : SinkOf<T, Self>> {
 }
 
 /**
- * A hot multicast push source.
+ * A hot multicast push source backed by a shared ring buffer.
+ *
+ * Fast subscribers share the ring buffer via per-subscriber cursors — emission cost
+ * is O(1) write + N lightweight wakeup taps regardless of subscriber count.
+ * A subscriber that falls behind the ring buffer window is automatically promoted
+ * to a dedicated [BoundedQueue], keeping it isolated from fast subscribers.
  *
  * Obtain instances via [Sinks.broadcast], [Sinks.replay], [Sinks.replayLast].
+ *
+ * **Thread safety**: [emit] serializes concurrent callers via an internal lock.
+ * [asMany] and [asOne] may be called concurrently.
  */
 sealed class Sink<T : Any>(
-    private val historySize: Int,
-    private val bufferSize: Int,
+    private val historySize:    Int,
+    private val bufferSize:     Int,
+    private val maxSlowBuffer:  Int,
 ) {
-    private val lock        = ReentrantLock()
+    private val buffer       = arrayOfNulls<Any>(bufferSize)
+    @Volatile private var writePos = 0L               // written by emitter, read by subscribers
+
     private val terminal    = AtomicReference<Any>(Unset)
-    private val history     = ArrayDeque<Signal.Upstream.Next<T>>()
-    private val subscribers = CopyOnWriteArrayList<Channel<Signal.Upstream<T>>>()
+    private val histLock    = ReentrantLock()          // guards history and subscriber registration
+    private val history     = ArrayDeque<T>()          // raw T, guarded by histLock
+    private val subscribers = CopyOnWriteArrayList<SubHandle<T>>()
 
     protected fun doEmit(value: T) {
         if (terminal.get().notUnset()) return
-        val signal = Signal.Upstream.Next(value)
+
         if (historySize > 0) {
-            lock.withLock {
-                history.addLast(signal)
+            histLock.withLock {
+                history.addLast(value)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
         }
-        for (inbox in subscribers) {
-            val result = inbox.trySend(signal)
-            if (result.isFailure && !result.isClosed)
-                throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or bufferSize too small")
+
+        val pos = writePos
+
+        for (sub in subscribers) {
+            if (!sub.promoted && pos - sub.cursor >= bufferSize) promote(sub, pos)
         }
+
+        buffer[pos.toInt() and (bufferSize - 1)] = value  // write before making visible
+        writePos = pos + 1                                  // volatile write — subscribers see buffer[pos]
+
+        for (sub in subscribers) {
+            if (sub.promoted) {
+                if (!sub.slowQueue!!.add(value))
+                    throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or maxSlowBuffer too small")
+            }
+        }
+        for (sub in subscribers) if (sub.waiting) sub.wakeup.trySend(Unit)
+    }
+
+    /** Promote [sub] to its dedicated slow-path queue; backfill its unread ring slots. */
+    private fun promote(sub: SubHandle<T>, currentPos: Long) {
+        if (sub.promoted) return
+        val q = BoundedQueue<T>(maxSlowBuffer)
+        val cursor = sub.cursor
+        for (i in cursor until currentPos) {
+            @Suppress("UNCHECKED_CAST")
+            q.add(buffer[(i.toInt() and (bufferSize - 1))] as T)
+        }
+        sub.slowQueue = q
+        sub.promoted  = true
     }
 
     protected fun doTerminate(signal: Signal.Upstream<T>) {
         if (!terminal.compareAndSet(Unset, signal)) return
-        for (inbox in subscribers) {
-            inbox.trySend(signal)
-            inbox.close()
-        }
+        for (sub in subscribers) if (sub.waiting) sub.wakeup.trySend(Unit)
     }
 
-    /** Returns false if the sink is terminated. */
+    /** Returns false if terminated or any slow subscriber's overflow queue is full. */
     fun tryEmit(value: T): Boolean {
         if (terminal.get().notUnset()) return false
-        doEmit(value)
+        if (historySize > 0) histLock.withLock {
+            history.addLast(value)
+            if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
+        }
+        val pos = writePos
+        for (sub in subscribers) {
+            if (!sub.promoted && pos - sub.cursor >= bufferSize) promote(sub, pos)
+        }
+        buffer[pos.toInt() and (bufferSize - 1)] = value
+        writePos = pos + 1
+        for (sub in subscribers) {
+            if (sub.promoted && !sub.slowQueue!!.add(value)) return false
+        }
+        for (sub in subscribers) if (sub.waiting) sub.wakeup.trySend(Unit)
         return true
     }
 
-    private fun registerWithHistory(inbox: Channel<Signal.Upstream<T>>): Pair<AutoCloseable, List<Signal.Upstream.Next<T>>> =
-        lock.withLock {
-            subscribers.add(inbox)
-            val snapshot = if (historySize > 0) history.toList() else emptyList()
-            AutoCloseable { lock.withLock { subscribers.remove(inbox) } } to snapshot
+    private fun register(): Pair<SubHandle<T>, List<T>> {
+        val handle = SubHandle<T>(writeStart = writePos)
+        val snapshot = if (historySize > 0) histLock.withLock {
+            subscribers.add(handle)
+            history.toList()
+        } else {
+            subscribers.add(handle)
+            emptyList()
         }
+        return handle to snapshot
+    }
 
-    fun asMany(): Many<T> = Many.generate { emit ->
-        val inbox = Channel<Signal.Upstream<T>>(bufferSize)
-        val (handle, replay) = registerWithHistory(inbox)
-        handle.using {
-            for (item in replay) {
-                if (emit(item) == Signal.Downstream.Cancel) return@using
+    @Suppress("UNCHECKED_CAST")
+    fun asMany(): Many<T> = Many.generate { generatorEmit ->
+        val (handle, snapshot) = register()
+        try {
+            for (item in snapshot) {
+                if (generatorEmit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
             }
-            val terminalState = terminal.get()
-            if (terminalState.notUnset()) {
-                when (terminalState) {
-                    is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
-                    is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(terminalState.cause))
-                    else                        -> {}
+
+            while (true) {
+                if (handle.promoted) {
+                    var item = handle.slowQueue!!.poll()
+                    while (item != null) {
+                        if (generatorEmit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
+                        item = handle.slowQueue!!.poll()
+                    }
+                    val t = terminal.get()
+                    if (t.notUnset()) { generatorEmit(t as Signal.Upstream<T>); return@generate }
+                    handle.wakeup.receive()
+                } else {
+                    val endPos = writePos              // snapshot: one volatile read per drain batch
+                    var drained = false
+                    while (handle.cursor < endPos) {
+                        val item = buffer[(handle.cursor.toInt() and (bufferSize - 1))] as T
+                        handle.cursor++
+                        if (generatorEmit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
+                        drained = true
+                    }
+                    val t = terminal.get()
+                    if (t.notUnset()) { generatorEmit(t as Signal.Upstream<T>); return@generate }
+                    if (!drained) {
+                        handle.waiting = true
+                        if (handle.cursor >= writePos && terminal.get().notUnset().not()) {
+                            handle.wakeup.receive()
+                        }
+                        handle.waiting = false
+                    }
                 }
-                return@using
             }
-            for (signal in inbox) {
-                if (emit(signal) == Signal.Downstream.Cancel) break
-            }
+        } finally {
+            subscribers.remove(handle)
         }
     }
 
-    fun asOne(): One<T> = One.generate { emit ->
-        val inbox = Channel<Signal.Upstream<T>>(bufferSize)
-        val (handle, history) = registerWithHistory(inbox)
-        handle.using {
-            for (item in history) {
-                emit(item)
-                emit(Signal.Upstream.Complete)
-                return@using
-            }
-            val terminalState = terminal.get()
-            if (terminalState.notUnset()) {
-                when (terminalState) {
-                    is Signal.Upstream.Complete -> emit(Signal.Upstream.Complete)
-                    is Signal.Upstream.Error    -> emit(Signal.Upstream.Error(terminalState.cause))
-                    else                        -> {}
-                }
-                return@using
-            }
-            for (signal in inbox) {
-                when {
-                    signal is Signal.Upstream.Next -> { emit(signal); emit(Signal.Upstream.Complete); return@using }
-                    else -> { emit(signal); return@using }
-                }
-            }
-        }
-    }
+    fun asOne(): One<T> = asMany().first()
 }
 
 /** Emits only to subscribers present at the time of emission; no history. */
-class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) :
-    Sink<T>(historySize = 0, bufferSize = bufferSize),
+class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = DEFAULT_MAX_SLOW) :
+    Sink<T>(historySize = 0, bufferSize = bufferSize, maxSlowBuffer = maxSlowBuffer),
     SinkOf<T, BroadcastSink<T>> {
 
     override fun emit(value: T): BroadcastSink<T>          = apply { doEmit(value) }
@@ -154,8 +239,8 @@ class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) :
 }
 
 /** Buffers the full emission history; late subscribers receive all past items then live items. */
-class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) :
-    Sink<T>(historySize = Int.MAX_VALUE, bufferSize = bufferSize),
+class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = DEFAULT_MAX_SLOW) :
+    Sink<T>(historySize = Int.MAX_VALUE, bufferSize = bufferSize, maxSlowBuffer = maxSlowBuffer),
     SinkOf<T, ReplaySink<T>> {
 
     override fun emit(value: T): ReplaySink<T>          = apply { doEmit(value) }
@@ -165,8 +250,8 @@ class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER) :
 }
 
 /** Buffers the last [n] items; late subscribers receive recent history then live items. */
-class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER) :
-    Sink<T>(historySize = count, bufferSize = bufferSize),
+class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = DEFAULT_MAX_SLOW) :
+    Sink<T>(historySize = count, bufferSize = bufferSize, maxSlowBuffer = maxSlowBuffer),
     SinkOf<T, ReplayLastSink<T>> {
 
     init { require(count > 0) { "ReplayLastSink requires count > 0, got $count" } }
@@ -178,14 +263,14 @@ class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER) 
 }
 
 object Sinks {
-    fun <T : Any> broadcast(bufferSize: Int = DEFAULT_BUFFER): BroadcastSink<T> =
-        BroadcastSink(bufferSize)
+    fun <T : Any> broadcast(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = bufferSize * 4): BroadcastSink<T> =
+        BroadcastSink(bufferSize, maxSlowBuffer)
 
-    fun <T : Any> replay(bufferSize: Int = DEFAULT_BUFFER): ReplaySink<T> =
-        ReplaySink(bufferSize)
+    fun <T : Any> replay(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = bufferSize * 4): ReplaySink<T> =
+        ReplaySink(bufferSize, maxSlowBuffer)
 
-    fun <T : Any> replayLast(n: Int, bufferSize: Int = DEFAULT_BUFFER): ReplayLastSink<T> =
-        ReplayLastSink(n, bufferSize)
+    fun <T : Any> replayLast(n: Int, bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = bufferSize * 4): ReplayLastSink<T> =
+        ReplayLastSink(n, bufferSize, maxSlowBuffer)
 
     fun <T : Any> unicast(): UnicastSink<T> = UnicastSink()
 }
