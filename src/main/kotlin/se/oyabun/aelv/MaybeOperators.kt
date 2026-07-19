@@ -19,13 +19,7 @@ package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
 import kotlin.internal.LowPriorityInOverloadResolution
-import kotlin.time.Duration
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import kotlin.coroutines.CoroutineContext
-import org.reactivestreams.Publisher
 
 private val log = Logging.of<Maybe<*>>()
 
@@ -34,7 +28,6 @@ fun <T : Any, R : Any> Maybe<T>.map(transform: (T) -> R): Maybe<R> {
     return Maybe.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
 }
 
-/** Suspend variant of [map] — [transform] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
@@ -51,7 +44,6 @@ fun <T : Any> Maybe<T>.filter(predicate: (T) -> Boolean): Maybe<T> {
     return Maybe.fromStep(Step.Filter(step, predicate), if (currentFusion is Fusion.Available) FilterFusion(currentFusion, predicate) else Fusion.None)
 }
 
-/** Suspend variant of [filter]. */
 @LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
     Maybe { onNext, onComplete, onError ->

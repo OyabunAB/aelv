@@ -23,16 +23,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 import org.reactivestreams.Publisher
 
@@ -43,7 +39,6 @@ fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
     return Many.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
 }
 
-/** Suspend variant of [map] — [transform] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.map(transform: suspend (T) -> R): Many<R> =
     Many.fused { onNext, onComplete, onError ->
@@ -72,7 +67,6 @@ fun <T : Any> Many<T>.filter(predicate: (T) -> Boolean): Many<T> {
     return Many.fromStep(Step.Filter(step, predicate), if (currentFusion is Fusion.Available) FilterFusion(currentFusion, predicate) else Fusion.None)
 }
 
-/** Suspend variant of [filter] — [predicate] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any> Many<T>.filter(predicate: suspend (T) -> Boolean): Many<T> =
     Many.fused { onNext, onComplete, onError ->
@@ -193,7 +187,6 @@ fun <T : Any, R : Any> Many<T>.flatMap(
 ): Many<R> = if (concurrency == 1) Many.fromStep(Step.ConcatMap(step, transform))
              else Many.fromStep(Step.FlatMap(step, concurrency, transform))
 
-/** Suspend variant of [flatMap] — [transform] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.flatMap(
     concurrency: Int = 256,
@@ -240,7 +233,6 @@ fun <T : Any, R : Any> Many<T>.flatMap(
 fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
     Many.fromStep(Step.ConcatMap(step, transform))
 
-/** Suspend variant of [concatMap] — [transform] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.concatMap(transform: suspend (T) -> Many<R>): Many<R> =
     Many.generate { emit ->
@@ -677,7 +669,6 @@ fun <T : Any> Many<T>.concatWith(other: Many<T>): Many<T> = concat(this, other)
 fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<*>): None<T> =
     concatMap { value -> transform(value).then { Many.items(value) } }.discard()
 
-/** Suspend variant of [flatMapNone] on [Many]. */
 @LowPriorityInOverloadResolution
 fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
     concatMap(transform = suspend { value: T -> transform(value).then { Many.items(value) } }).discard()
@@ -692,7 +683,6 @@ fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
 fun <T : Any, R : Any> Many<T>.flatMapOne(transform: (T) -> One<R>): Many<R> =
     flatMap { value: T -> Many.from(transform(value)) }
 
-/** Suspend variant of [flatMapOne] on [Many]. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.flatMapOne(transform: suspend (T) -> One<R>): Many<R> {
     val asManyTransform: suspend (T) -> Many<R> = { value -> Many.from(transform(value)) }

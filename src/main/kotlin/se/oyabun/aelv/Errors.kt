@@ -126,7 +126,7 @@ sealed class AelvException(message: String, cause: Throwable? = null) : IllegalA
 class InvalidDemandException(n: Long) :
     AelvException("request must be positive, got $n (RS spec §3.9)")
 
-/** Thrown by terminal operators such as [Many.first] and [One.get] when the stream is empty. */
+/** Thrown by terminal operators such as [Many.first] and [One.await] when the stream is empty. */
 class NoSuchElementException :
     AelvException("stream completed without emitting a value")
 

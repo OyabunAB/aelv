@@ -16,7 +16,6 @@
 package se.oyabun.aelv
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import org.reactivestreams.Publisher
 

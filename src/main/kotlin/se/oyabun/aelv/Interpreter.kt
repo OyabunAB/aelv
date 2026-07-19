@@ -15,10 +15,7 @@
  */
 package se.oyabun.aelv
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.reactive.asFlow

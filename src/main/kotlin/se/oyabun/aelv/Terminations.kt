@@ -126,7 +126,6 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
         }
     }
 
-/** Suspend variant of [fold] — [accumulate] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: suspend (R, T) -> R): One<R> =
     One.generate { emit ->

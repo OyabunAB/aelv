@@ -19,17 +19,10 @@ package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
 import kotlin.internal.LowPriorityInOverloadResolution
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
-import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
-import org.reactivestreams.Publisher
 
 private val log = Logging.of<One<*>>()
 
@@ -38,7 +31,6 @@ fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> {
     return One.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
 }
 
-/** Suspend variant of [map] — [transform] may call suspend functions. */
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
     One.generate { emit ->

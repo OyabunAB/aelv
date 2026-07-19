@@ -80,7 +80,7 @@ fun <T : Any, R : Any> Many<T>.then(next: Many<R>): Many<R> {
  * Composes this [Many] pipeline step with a terminal [One] [next], returning a [One] that feeds
  * this step's output into [next]'s [Many.pipelineFrom] source slot.
  *
- * Typical use: attaching a collecting terminal (issue.g. [toList], [fold]) to a [Many] pipeline.
+ * Typical use: attaching a collecting terminal (i.e. [toList], [fold]) to a [Many] pipeline.
  * ```kotlin
  * val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 2 }.then(collector)
  * ```
