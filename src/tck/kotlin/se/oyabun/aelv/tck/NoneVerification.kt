@@ -20,17 +20,16 @@ import org.reactivestreams.tck.PublisherVerification
 import org.reactivestreams.tck.TestEnvironment
 import org.testng.annotations.Test
 import se.oyabun.aelv.Many
-import se.oyabun.aelv.One
+import se.oyabun.aelv.None
 import se.oyabun.aelv.concatWith
 
 @Test
-class OneVerification : PublisherVerification<Int>(TestEnvironment()) {
+class NoneVerification : PublisherVerification<Int>(TestEnvironment()) {
 
     override fun createPublisher(elements: Long): Publisher<Int> = when {
-        elements == 0L   -> Many.empty()
-        elements == 1L   -> One.single(1)
+        elements == 0L   -> None.complete<Int>() as Publisher<Int>
         elements <= 64L  -> (1..elements)
-            .map { One.single(it.toInt()).toMany() }
+            .map { None.complete<Int>().thenReturn(it.toInt()).toMany() }
             .reduce { a, b -> a.concatWith(b) }
         else             -> Many.range(1, elements.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
     }

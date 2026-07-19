@@ -10,4 +10,14 @@
             <class name="se.oyabun.aelv.tck.OneVerification"/>
         </classes>
     </test>
+    <test name="MaybeVerification">
+        <classes>
+            <class name="se.oyabun.aelv.tck.MaybeVerification"/>
+        </classes>
+    </test>
+    <test name="NoneVerification">
+        <classes>
+            <class name="se.oyabun.aelv.tck.NoneVerification"/>
+        </classes>
+    </test>
 </suite>
