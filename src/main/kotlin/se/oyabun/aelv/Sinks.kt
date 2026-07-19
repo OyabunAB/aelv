@@ -57,16 +57,16 @@ sealed class Sink<T : Any>(
     protected fun doEmit(value: T) {
         if (terminal.get().notUnset()) return
         val signal = Signal.Upstream.Next(value)
-        lock.withLock {
-            if (historySize > 0) {
+        if (historySize > 0) {
+            lock.withLock {
                 history.addLast(signal)
                 if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
             }
-            subscribers.forEach { inbox ->
-                val result = inbox.trySend(signal)
-                if (result.isFailure && !result.isClosed)
-                    throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or bufferSize too small")
-            }
+        }
+        for (inbox in subscribers) {
+            val result = inbox.trySend(signal)
+            if (result.isFailure && !result.isClosed)
+                throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or bufferSize too small")
         }
     }
 

@@ -18,6 +18,9 @@ package se.oyabun.aelv.benchmarks
 import org.openjdk.jmh.annotations.*
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.core.publisher.Sinks
+import reactor.core.scheduler.Schedulers
+import java.util.concurrent.CountDownLatch
 
 @BenchmarkMode(Mode.Throughput)
 @State(Scope.Thread)
@@ -66,8 +69,24 @@ open class ReactorBenchmark {
             .collectList().block()!!.size
 
     @Benchmark
-    fun fold_sum(): Long =
-        Flux.range(0, size)
-            .reduce(0L) { acc, i -> acc + i }
-            .block()!!
+    fun sink_multicast_single_subscriber(): Int {
+        val sink = Sinks.many().multicast().onBackpressureBuffer<Int>(size * 2)
+        val latch = CountDownLatch(1)
+        sink.asFlux().subscribeOn(Schedulers.boundedElastic()).collectList().subscribe { latch.countDown() }
+        repeat(size) { sink.tryEmitNext(it) }
+        sink.tryEmitComplete()
+        latch.await()
+        return size
+    }
+
+    @Benchmark
+    fun sink_multicast_four_subscribers(): Int {
+        val sink = Sinks.many().multicast().onBackpressureBuffer<Int>(size * 2)
+        val latch = CountDownLatch(4)
+        repeat(4) { sink.asFlux().subscribeOn(Schedulers.boundedElastic()).collectList().subscribe { latch.countDown() } }
+        repeat(size) { sink.tryEmitNext(it) }
+        sink.tryEmitComplete()
+        latch.await()
+        return size
+    }
 }

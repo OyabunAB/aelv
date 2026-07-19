@@ -132,7 +132,7 @@ open class AelvBenchmark {
 
     @Benchmark
     fun sink_broadcast_single_subscriber(): Int {
-        val sink = Sinks.broadcast<Int>()
+        val sink = Sinks.broadcast<Int>(bufferSize = size * 2)
         return run {
             val job = scope.launch { sink.asMany().toList().await() }
             repeat(size) { sink.emit(it) }
@@ -144,7 +144,7 @@ open class AelvBenchmark {
 
     @Benchmark
     fun sink_broadcast_four_subscribers(): Int {
-        val sink = Sinks.broadcast<Int>()
+        val sink = Sinks.broadcast<Int>(bufferSize = size * 2)
         return run {
             val jobs = List(4) { scope.launch { sink.asMany().toList().await() } }
             repeat(size) { sink.emit(it) }
