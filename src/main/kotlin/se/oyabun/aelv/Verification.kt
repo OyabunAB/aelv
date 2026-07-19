@@ -107,6 +107,8 @@ class Verify<T : Any, S : Observable<T, S>> private constructor(
         assertions(type.cast(cause))
     }
 
+    fun timesOut(within: Duration = DEFAULT_TIMEOUT) = failedWith<TimeoutException>(within)
+
     fun completesEmpty(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
         source.toMany()
             .flatMapNone { value: T -> None.error<T>(IllegalStateException("expected empty but got: $value")) }

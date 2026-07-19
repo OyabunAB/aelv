@@ -17,6 +17,7 @@ package se.oyabun.aelv
 
 import com.sun.jdi.request.InvalidRequestStateException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -1130,6 +1131,64 @@ class OperatorsTest {
             Verify.that(Many.items(1, 2, 3))
                 .emitsNext(1, 2, 3)
                 .completed()
+        }
+    }
+
+    inner class TimeoutTest {
+
+        @Test
+        fun `Many timeout fires when stream does not complete in time`() {
+            Verify.that(Many.never<Int>().timeout(50.milliseconds))
+                .timesOut()
+        }
+
+        @Test
+        fun `Many timeout passes through when stream completes in time`() {
+            Verify.that(Many.items(1, 2, 3).timeout(5.seconds))
+                .emitsNext(1, 2, 3)
+                .completesNormally()
+        }
+
+        @Test
+        fun `One timeout fires when value does not arrive in time`() {
+            Verify.that(One.never<Int>().timeout(50.milliseconds))
+                .timesOut()
+        }
+
+        @Test
+        fun `One timeout passes through when value arrives in time`() {
+            Verify.that(One.single(42).timeout(5.seconds))
+                .assertNext { assertEquals(42, it) }
+                .completesNormally()
+        }
+
+        @Test
+        fun `Maybe timeout fires when neither value nor empty arrives in time`() {
+            Verify.that(Maybe.never<Int>().timeout(50.milliseconds))
+                .timesOut()
+        }
+
+        @Test
+        fun `Maybe timeout passes through present value in time`() {
+            Verify.that(Maybe.present(7).timeout(5.seconds))
+                .assertNext { assertEquals(7, it) }
+                .completesNormally()
+        }
+
+        @Test
+        fun `Maybe timeout passes through empty completion in time`() {
+            Verify.that(Maybe.empty<Int>().timeout(5.seconds))
+                .completesEmpty()
+        }
+
+        @Test
+        fun `timeout does not include downstream processing time`() {
+            val slow: suspend (Int) -> Many<Int> = { v -> delay(200.milliseconds); Many.items(v) }
+            Verify.that(Many.items(1, 2, 3)
+                .timeout(100.milliseconds)
+                .concatMap(transform = slow))
+                .emitsNext(1, 2, 3)
+                .completesNormally()
         }
     }
 }

@@ -18,8 +18,11 @@ package se.oyabun.aelv
 
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.reactivestreams.Publisher
 
@@ -172,6 +175,36 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
     fun delaySubscription(delay: Duration): Self = wrap { onNext, onComplete, onError ->
         kotlinx.coroutines.delay(delay)
         source(onNext, onComplete, onError)
+    }
+
+    /**
+     * Signals [TimeoutException] if no signal arrives from this source within [duration].
+     *
+     * The timeout window covers only the time upstream takes to emit each signal — downstream
+     * processing is excluded. Resets on each received item, so this is a per-item deadline.
+     */
+    fun timeout(duration: Duration): Self = wrap { onNext, onComplete, onError ->
+        coroutineScope {
+            val inbox = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
+            val producer = launch {
+                source(
+                    { value -> inbox.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
+                    { inbox.send(Signal.Upstream.Complete) },
+                    { e -> inbox.send(Signal.Upstream.Error(e)) },
+                )
+            }
+            var done = false
+            while (!done) {
+                when (val result = Either.catching(duration) { inbox.receive() }) {
+                    is Failure -> { producer.cancel(); onError(result.value); done = true }
+                    is Success -> when (val signal = result.value) {
+                        is Signal.Upstream.Next     -> if (onNext(signal.value) == Signal.Downstream.Cancel) { producer.cancel(); done = true }
+                        is Signal.Upstream.Complete -> { onComplete(); done = true }
+                        is Signal.Upstream.Error    -> { onError(signal.cause); done = true }
+                    }
+                }
+            }
+        }
     }
 
     fun delaySubscription(trigger: Publisher<*>): Self = wrap { onNext, onComplete, onError ->
