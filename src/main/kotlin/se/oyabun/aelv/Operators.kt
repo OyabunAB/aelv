@@ -20,6 +20,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicInteger
 
+private sealed interface Tagged<out A : Any, out B : Any>
+private data class FromA<out A : Any>(val value: A) : Tagged<A, Nothing>
+private data class FromB<out B : Any>(val value: B) : Tagged<Nothing, B>
+
 /**
  * Merges all [sources] into a single [Many], interleaving items as they arrive.
  * Completes when all sources have completed.  Errors from any source are forwarded immediately.
@@ -152,20 +156,20 @@ fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R
  */
 fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
     Many.generate { emit ->
-        // Channel carries tagged values (Left = from a, Right = from b) plus errors.
+        // Channel carries tagged values (FromA/FromB) plus errors.
         // All producer signals pass through the channel — single collector, serial emit — RS 1.3.
-        val channel = Channel<Signal.Upstream<Either<A, B>>>(Channel.BUFFERED)
+        val channel = Channel<Signal.Upstream<Tagged<A, B>>>(Channel.BUFFERED)
         coroutineScope {
             val jobA = launch {
                 a.source(
-                    { value -> channel.send(Signal.Upstream.Next(Either.Left(value))); Signal.Downstream.Request },
+                    { value -> channel.send(Signal.Upstream.Next(FromA(value))); Signal.Downstream.Request },
                     { },
                     { issue -> channel.send(Signal.Upstream.Error(issue)) },
                 )
             }
             val jobB = launch {
                 b.source(
-                    { value -> channel.send(Signal.Upstream.Next(Either.Right(value))); Signal.Downstream.Request },
+                    { value -> channel.send(Signal.Upstream.Next(FromB(value))); Signal.Downstream.Request },
                     { },
                     { issue -> channel.send(Signal.Upstream.Error(issue)) },
                 )
@@ -183,7 +187,7 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                     is Signal.Upstream.Error -> { emit(signal); terminated = true; break }
                     is Signal.Upstream.Complete -> break
                     is Signal.Upstream.Next -> when (val tagged = signal.value) {
-                        is Failure  -> {
+                        is FromA -> {
                             latestA = tagged.value.right()
                             val capturedB = latestB
                             if (capturedB is Success) {
@@ -192,7 +196,7 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                                 }
                             }
                         }
-                        is Success -> {
+                        is FromB -> {
                             latestB = tagged.value.right()
                             val capturedA = latestA
                             if (capturedA is Success) {

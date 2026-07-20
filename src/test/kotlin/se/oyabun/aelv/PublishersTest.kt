@@ -154,7 +154,7 @@ class PublishersTest {
             Verify.that(One.create<Int> { _, failure ->
                 failure(RuntimeException("expected error"))
             })
-                .failedWith<RuntimeException> { assertEquals("expected error", it.message) }
+                .failsWith<RuntimeException> { assertEquals("expected error", it.message) }
         }
 
         @Test
@@ -216,7 +216,7 @@ class PublishersTest {
         fun `thenReturn emits value after None completes`() {
             Verify.that(None.complete<Int>().thenReturn(42))
                 .assertNext { assertEquals(42, it) }
-                .completesNormally()
+                .completes()
         }
     }
 }

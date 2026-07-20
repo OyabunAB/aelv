@@ -29,7 +29,7 @@ class UnicastSinkTest {
 
         Verify.that(sink.asMany())
             .emitsNext(1)
-            .completesNormally()
+            .completes()
     }
 
     @Test
@@ -40,7 +40,7 @@ class UnicastSinkTest {
 
         Verify.that(sink.asMany())
             .emitsNext(1, 2, 3, 4, 5)
-            .completesNormally()
+            .completes()
     }
 
     @Test
@@ -51,9 +51,9 @@ class UnicastSinkTest {
 
         Verify.that(sink.asMany())
             .emitsNext(1, 2, 3, 4)
-            .completesNormally()
+            .completes()
 
-        Verify.that(sink.asMany()).failedWith<IllegalStateException>()
+        Verify.that(sink.asMany()).failsWith<IllegalStateException>()
     }
 
     @Test
@@ -64,7 +64,7 @@ class UnicastSinkTest {
 
         Verify.that(sink.asMany())
             .emitsNext("hello")
-            .completesNormally()
+            .completes()
     }
 
     @Test
@@ -73,7 +73,7 @@ class UnicastSinkTest {
         val emitter = None.defer<Int> { sink.emit(1); sink.emit(2); sink.complete() }.toMany()
         Verify.that(merge(sink.asMany(), emitter))
             .emitsNext(1, 2)
-            .completesNormally()
+            .completes()
     }
 
     @Test
@@ -82,7 +82,7 @@ class UnicastSinkTest {
         val cause = RuntimeException("boom")
         sink.error(cause)
 
-        Verify.that(sink.asMany()).failedWith<RuntimeException> {
+        Verify.that(sink.asMany()).failsWith<RuntimeException> {
             assertEquals("boom", it.message)
         }
     }
@@ -92,7 +92,7 @@ class UnicastSinkTest {
         val sink = Sinks.unicast<Int>()
         sink.complete()
 
-        Verify.that(sink.asMany()).completesNormally()
+        Verify.that(sink.asMany()).completes()
     }
 
     @Test
@@ -104,7 +104,7 @@ class UnicastSinkTest {
 
         Verify.that(sink.asOne())
             .assertNext { assertEquals("first", it) }
-            .completesNormally()
+            .completes()
     }
 
     @Test
@@ -113,7 +113,7 @@ class UnicastSinkTest {
         sink.complete()
         sink.emit(99)
 
-        Verify.that(sink.asMany()).completesNormally()
+        Verify.that(sink.asMany()).completes()
     }
 
     @Test
@@ -122,6 +122,6 @@ class UnicastSinkTest {
         sink.error(RuntimeException("oops"))
         sink.emit(99)
 
-        Verify.that(sink.asMany()).failedWith<RuntimeException> { assertEquals("oops", it.message) }
+        Verify.that(sink.asMany()).failsWith<RuntimeException> { assertEquals("oops", it.message) }
     }
 }

@@ -30,8 +30,6 @@ dependencies {
     "jmhAnnotationProcessor"(libs.jmh.generator.annprocess)
 }
 
-version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
-
 val isPublishable = !version.toString().endsWith("-SNAPSHOT")
 val isRelease     = Regex("""^\d+\.\d+\.\d+$""").matches(version.toString())
 val signingKey: String? = System.getenv("GPG_SIGNING_KEY")
@@ -63,8 +61,8 @@ val tckTest by tasks.registering(Test::class) {
 tasks.check { dependsOn(tckTest) }
 
 jmh {
-    warmupIterations = 2
-    iterations = 3
+    warmupIterations = 3
+    iterations = 5
     fork = 1
     timeUnit = "ms"
     benchmarkMode = listOf("thrpt")

@@ -177,6 +177,15 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
         source(onNext, onComplete, onError)
     }
 
+    /** Delays each item by [delay] before passing it downstream. */
+    fun delayElement(delay: Duration): Self = wrap { onNext, onComplete, onError ->
+        source(
+            { value -> kotlinx.coroutines.delay(delay); onNext(value) },
+            onComplete,
+            onError,
+        )
+    }
+
     /**
      * Signals [TimeoutException] if no signal arrives from this source within [duration].
      *

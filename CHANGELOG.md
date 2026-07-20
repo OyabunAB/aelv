@@ -1,5 +1,97 @@
 # Changelog
 
+## 1.0.0-rc.7 — 2026-07-20
+
+### Added
+
+- `timeout(Duration)` operator on `Observable`/`Many`/`One`/`Maybe` — fires `TimeoutException` if no item or terminal arrives within the deadline; wakeup channel only activates when subscriber is actually waiting
+- `Verify.timesOut()` terminal assertion for timeout tests
+- TCK: `ManyVerification`, `OneVerification`, `MaybeVerification`, `NoneVerification` — 152 tests, 0 failures
+
+### Changed
+
+- Ring buffer sink — per-subscriber `Channel` fan-out replaced with shared ring buffer and per-subscriber cursor (`SubHandle`); slow subscribers promoted to `BoundedQueue`; `doEmit` lock-free for `BroadcastSink`; `DEFAULT_BUFFER` raised to 4096
+- `StreamSubscription` unbounded fast path — `demand == Long.MAX_VALUE` skips `awaitDemand()`/`demand.updateAndGet()` per item; `signal` Channel allocated lazily; `subscribeGate` Channel removed
+- `Interpreter.execSuspend` direct `Frame.Collect` dispatch — eliminates `ContinuationImpl` allocation per delivered item
+- Fusion propagated across `One` and `Maybe`; `Maybe.fromStep` wraps with `TakeFusion(1)` to enforce at-most-one constraint
+- `Observable` is now a public abstract class — `Many`/`One`/`Maybe`/`None` extend it; `Verify<T, S>` preserves source type
+- Stream lifecycle log events demoted to TRACE
+
+### Fixed
+
+- `Sink.asMany` register+history race — atomic subscribe gate
+- `doFinally` Cancel path did not fire in all cancellation scenarios
+- `Sink.emit` overflow now throws `IllegalStateException` on full slow buffer
+- `None.error(Throwable)` now wraps in `Exception` correctly
+- `LowPriorityInOverloadResolution` removed from `Observable`, `OneOperators`, `MaybeOperators`, `NoneOperators` (retained only in `ManyOperators` and `Terminations` where fused vs coroutine overloads differ)
+- Multiple `Disposable.cancel` before `onSubscribe` now correctly prevents subscription start
+- `takeWhile` signals `onComplete` from the completion path, not from the `onNext` callback
+- `CompletionSubscription` guards against multiple `request()` calls
+- `flatMapSequential` does not emit `Complete` after downstream cancel
+- `UnicastSink.asMany` forwards `Complete` signal to downstream
+- `retry` intercepts `onError` callback instead of catching exceptions
+
+---
+
+## 1.0.0-rc.6 — 2026-07-17
+
+### Added
+
+- `delaySubscription(Duration)` and `delaySubscription(Publisher)` on `One`, `Maybe`, and `None`
+- `retry(times)` and `retry(Policy)` on `One`, `Maybe`, and `None`
+- `doOnRetry` and `doOnRecover` on all four types
+- KDoc on `delaySubscription` and `retry` for `One`, `Maybe`, and `None`
+- Extended test coverage: `delaySubscription(Duration)` on all four types; `retry(times)` on `Maybe` and `None`
+- `UnicastSink` enforces single-subscriber — second subscriber receives `IllegalStateException` immediately
+
+---
+
+## 1.0.0-rc.5 — 2026-07-17
+
+### Added
+
+- `resource` bracket operator on `Many`, `One`, `Maybe`, `None` — release always runs even on downstream cancel
+- `flatMapNone` on `Many`, `One`, `Maybe`, `None`
+- `doOnNext`, `doOnComplete`, `doOnError`, `doOnSubscribe`, `doFinally` on `Maybe` and `None`
+- `subscribeOn`/`publishOn` on `Maybe` and `None`
+- `Either.success()`/`Either.failure()` companion factories
+- Operator files split by type: `ManyOperators.kt`, `OneOperators.kt`, `MaybeOperators.kt`, `NoneOperators.kt`
+- `Verify` rewritten as a pure pipeline builder; `Verify<T, S>` generic over source type
+
+### Fixed
+
+- `zip` cancel semantics — downstream cancel correctly stops both sources
+- `None.recover` added
+- `Maybe.retry` now signals `onComplete` after successful retry
+- `firstMaybe` cancel fix
+
+---
+
+## 1.0.0-rc.4 — 2026-07-14
+
+### Added
+
+- `Maybe<T>` — fourth publisher type for 0-or-1 items; no nulls, no more than one element
+- `flatMapMany`, `flatMapMaybe`, `flatMapNone` on `One`
+- `UnicastSink` — single-subscriber hot source; subsequent subscribers receive `IllegalStateException`
+- `Verify.assertNext { }` — assertion lambda over the next item
+- `Verify.timesOut(within)` — asserts the stream fires `TimeoutException` within the deadline
+- `scan(initial, accumulate)` operator on `Many`
+- `Many.defer(suspend () -> Many<T>)` suspend factory variant
+- `Either.getOrThrow()`, `Either.required()` utilities
+- Suspend overloads for `map`, `flatMap`, `concatMap`, `filter`, `doOn*`, `recover`, `fold`, `defer` — annotated `@LowPriorityInOverloadResolution`
+
+### Changed
+
+- Fusion poll loop: per-item `Either` allocation eliminated
+- `None.then` chaining — run subsequent publisher after side-effect completes
+
+### Fixed
+
+- Stale `Many.source` override identical to `Observable` base removed
+
+---
+
 ## 1.0.0-rc.3 — 2026-07-12
 
 ### Added

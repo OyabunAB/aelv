@@ -34,85 +34,85 @@ class OperatorsTest {
         fun `map transforms items`() {
             Verify.that(Many.items(1, 2, 3).map { it * 2 })
                 .emitsNext(2, 4, 6)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `map on empty emits nothing`() {
             Verify.that(Many.empty<Int>().map { it * 2 })
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `map propagates error`() {
             Verify.that(Many.items(1).map { throw InvalidDemandException(-1) })
-                .failedWith<InvalidDemandException>()
+                .failsWith<InvalidDemandException>()
         }
 
         @Test
         fun `filter keeps matching items`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).filter { it % 2 == 0 })
                 .emitsNext(2, 4)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `filter propagates error`() {
             Verify.that(Many.items(1).filter { throw InvalidDemandException(-1) })
-                .failedWith<InvalidDemandException>()
+                .failsWith<InvalidDemandException>()
         }
 
         @Test
         fun `mapNotNull transforms and drops nulls`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).mapNotNull { if (it % 2 == 0) it * 10 else null })
                 .emitsNext(20, 40)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `mapNotNull on all-null source emits nothing`() {
             Verify.that(Many.items(1, 3, 5).mapNotNull<Int, Int> { null })
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `mapNotNull propagates error`() {
             Verify.that(Many.items(1).mapNotNull { throw InvalidDemandException(-1) })
-                .failedWith<InvalidDemandException>()
+                .failsWith<InvalidDemandException>()
         }
 
         @Test
         fun `take limits to n items`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).take(3))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .cancels()
         }
 
         @Test
         fun `take zero emits nothing`() {
             Verify.that(Many.items(1, 2, 3).take(0))
-                .completesNormally()
+                .cancels()
         }
 
         @Test
         fun `skip drops first n items`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).skip(2))
                 .emitsNext(3, 4, 5)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `skipWhile skips until predicate false`() {
             Verify.that(Many.items(1, 2, 3, 4, 1).skipWhile { it < 3 })
                 .emitsNext(3, 4, 1)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `takeWhile emits until predicate false`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).takeWhile { it < 4 })
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -124,7 +124,7 @@ class OperatorsTest {
                     .doOnComplete { completions++ }
             )
                 .emitsNext(1, 2)
-                .completesNormally()
+                .completes()
             assertEquals(1, completions, "onComplete must fire exactly once")
         }
 
@@ -132,14 +132,14 @@ class OperatorsTest {
         fun `distinct removes duplicates`() {
             Verify.that(Many.items(1, 2, 1, 3, 2).distinct())
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `distinctUntilChanged removes consecutive duplicates only`() {
             Verify.that(Many.items(1, 1, 2, 2, 1).distinctUntilChanged())
                 .emitsNext(1, 2, 1)
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -149,14 +149,14 @@ class OperatorsTest {
         fun `flatMap expands each item`() {
             val source = Many.items(1, 2, 3)
             val result = source.flatMap { Many.items(it, it * 10) }.toList().map { it.sorted() }
-            Verify.that(result).emitsNext(listOf(1, 2, 3, 10, 20, 30)).completesNormally()
+            Verify.that(result).emitsNext(listOf(1, 2, 3, 10, 20, 30)).completes()
         }
 
         @Test
         fun `concatMap preserves order`() {
             Verify.that(Many.items(1, 2, 3).concatMap { Many.items(it, it * 10) })
                 .emitsNext(1, 10, 2, 20, 3, 30)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -166,7 +166,7 @@ class OperatorsTest {
                 emit(Signal.Upstream.Complete)
             }.concatMap { Many.items(it, it * 10) })
                 .emitsNext(1, 10, 2, 20, 3, 30)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -184,7 +184,7 @@ class OperatorsTest {
             val a      = Many.items(1, 3)
             val b      = Many.items(2, 4)
             val result = merge(a, b).toList().map { it.sorted() }
-            Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completesNormally()
+            Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completes()
         }
 
         @Test
@@ -192,14 +192,14 @@ class OperatorsTest {
             val a      = Many.items(1, 2)
             val b      = Many.items(3, 4)
             val result = a.mergeWith(b).toList().map { it.sorted() }
-            Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completesNormally()
+            Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completes()
         }
 
         @Test
         fun `concat sequences streams in order`() {
             val a = Many.items(1, 2)
             val b = Many.items(3, 4)
-            Verify.that(concat(a, b)).emitsNext(1, 2, 3, 4).completesNormally()
+            Verify.that(concat(a, b)).emitsNext(1, 2, 3, 4).completes()
         }
 
         @Test
@@ -207,7 +207,7 @@ class OperatorsTest {
             val source = Many.items(1, 2)
             Verify.that(concat(Many.empty(), source, Many.empty<Int>()))
                 .emitsNext(1, 2)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -216,7 +216,7 @@ class OperatorsTest {
             val letters = Many.items("a", "b", "c")
             Verify.that(zip(numbers, letters) { n, s -> "$n$s" })
                 .emitsNext("1a", "2b", "3c")
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -230,7 +230,7 @@ class OperatorsTest {
             val sourceB = Many.items("a")
             Verify.that(zip(sourceA, sourceB) { n, s -> "$n$s" })
                 .emitsNext("1a")
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -240,14 +240,14 @@ class OperatorsTest {
         fun `buffer collects items into fixed size lists`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).buffer(2))
                 .emitsNext(listOf(1, 2), listOf(3, 4), listOf(5))
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `buffer emits partial bucket on completion`() {
             Verify.that(Many.items(1, 2, 3).buffer(2))
                 .emitsNext(listOf(1, 2), listOf(3))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -258,7 +258,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).recover { Many.items(99) })
                 .emitsNext(99)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -266,7 +266,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).recoverWith { 99 })
                 .emitsNext(99)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -279,7 +279,7 @@ class OperatorsTest {
                 emit(Signal.Upstream.Complete)
             }.retry(times = 3))
                 .emitsNext(42)
-                .completesNormally()
+                .completes()
             assertEquals(3, attempts)
         }
 
@@ -288,7 +288,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(times = 2))
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -301,7 +301,7 @@ class OperatorsTest {
                 emit(Signal.Upstream.Complete)
             }.retry(Policy.retry().maxAttempts(3)))
                 .emitsNext(42)
-                .completesNormally()
+                .completes()
             assertEquals(3, attempts)
         }
 
@@ -310,7 +310,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(Policy.retry().maxAttempts(2)))
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -323,7 +323,7 @@ class OperatorsTest {
                 emit(Signal.Upstream.Complete)
             }.retry(Policy.retry().withBackoff(10.milliseconds).maxAttempts(3)))
                 .emitsNext(42)
-                .completesNormally()
+                .completes()
             assertEquals(3, attempts)
         }
 
@@ -337,7 +337,7 @@ class OperatorsTest {
                 emit(Signal.Upstream.Complete)
             }.retry(Policy.retry().withBackoff(10.milliseconds, 100.milliseconds).maxAttempts(3)))
                 .emitsNext(42)
-                .completesNormally()
+                .completes()
             assertEquals(3, attempts)
         }
 
@@ -346,7 +346,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).retry(Policy.retry().on(NoSuchElementException::class).maxAttempts(5)))
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -356,7 +356,7 @@ class OperatorsTest {
                 attempts++
                 throw InvalidDemandException(-1)
             }.retry(Policy.retry().maxAttempts(0)))
-                .failed()
+                .fails()
             assertEquals(1, attempts)
         }
     }
@@ -367,7 +367,7 @@ class OperatorsTest {
         fun `fold accumulates all items`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).fold(0) { acc, item -> acc + item })
                 .emitsNext(15)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -375,41 +375,41 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).fold(0) { acc, item -> acc + item })
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
         fun `first returns first item`() {
             Verify.that(Many.items(1, 2, 3).first())
                 .assertNext { assertEquals(1, it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `first on empty returns NoSuchElementException`() {
             Verify.that(Many.empty<Int>().first())
-                .failedWith<NoSuchElementException>()
+                .failsWith<NoSuchElementException>()
         }
 
         @Test
         fun `last returns last item`() {
             Verify.that(Many.items(1, 2, 3).last())
                 .assertNext { assertEquals(3, it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `toList returns immutable list`() {
             Verify.that(Many.items(1, 2, 3).toList())
                 .emitsNext(listOf(1, 2, 3))
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `toSet returns immutable set`() {
             Verify.that(Many.items(1, 2, 1, 3).toSet())
                 .emitsNext(setOf(1, 2, 3))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -419,28 +419,28 @@ class OperatorsTest {
         fun `map transforms value`() {
             Verify.that(One.single(5).map { it * 3 })
                 .emitsNext(15)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `flatMap chains to another One`() {
             Verify.that(One.single(5).flatMap { One.single(it * 2) })
                 .emitsNext(10)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `flatMapMany expands to Many`() {
             Verify.that(One.single(3).flatMapMany { Many.items(it, it + 1, it + 2) })
                 .emitsNext(3, 4, 5)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `recover replaces error with fallback value`() {
             Verify.that(One.error<Int>(InvalidDemandException(-1)).recover { One.single(99) })
                 .emitsNext(99)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -452,8 +452,41 @@ class OperatorsTest {
                 42
             }.retry(Policy.retry().maxAttempts(3)))
                 .emitsNext(42)
-                .completesNormally()
+                .completes()
             assertEquals(3, attempts)
+        }
+
+        @Test
+        fun `flatMapMaybe maps value to present Maybe`() {
+            Verify.that(One.single(5).flatMapMaybe { Maybe.present(it * 2) })
+                .emitsNext(10)
+                .completes()
+        }
+
+        @Test
+        fun `flatMapMaybe maps value to empty Maybe`() {
+            Verify.that(One.single(5).flatMapMaybe { Maybe.empty<Int>() })
+                .completes()
+        }
+
+        @Test
+        fun `flatMapMaybe propagates error`() {
+            Verify.that(One.error<Int>(InvalidDemandException(-1)).flatMapMaybe { Maybe.present(it) })
+                .failsWith<InvalidDemandException>()
+        }
+
+        @Test
+        fun `await with timeout returns value when it arrives in time`() = runTest {
+            val result = One.single(42).await(5.seconds)
+            assertIs<Success<Int>>(result)
+            assertEquals(42, result.value)
+        }
+
+        @Test
+        fun `await with timeout returns TimeoutException when source does not emit`() = runTest {
+            val result = One.never<Int>().await(10.milliseconds)
+            assertIs<Failure<Exception>>(result)
+            assertIs<TimeoutException>(result.value)
         }
     }
 
@@ -469,7 +502,7 @@ class OperatorsTest {
                 .toList()
                 .map { it.size })
                 .emitsNext(6)
-                .completesNormally()
+                .completes()
             assertEquals(listOf(2, 4, 6), byKey[0]?.sorted())
             assertEquals(listOf(1, 3, 5), byKey[1]?.sorted())
         }
@@ -485,7 +518,7 @@ class OperatorsTest {
                 .toList()
                 .map { it.map { (k, _) -> k }.toSet() })
                 .emitsNext(setOf("a", "b", "c"))
-                .completesNormally()
+                .completes()
             assertEquals(setOf("a", "b", "c"), completed)
         }
 
@@ -502,7 +535,7 @@ class OperatorsTest {
                     group.recover { err -> errors[key] = err; Many.empty() }
                 }
                 .recover { Many.empty() })
-                .completesNormally()
+                .completes()
             assertEquals(setOf("x", "y"), errors.keys)
             assertTrue(errors.values.all { it === cause })
         }
@@ -512,14 +545,14 @@ class OperatorsTest {
             Verify.that(Many.items(10, 20, 30)
                 .groupBy({ "only" }) { _, group -> group })
                 .emitsNext(10, 20, 30)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `empty source emits no items and completes`() {
             Verify.that(Many.empty<Int>()
                 .groupBy({ it }) { _, group -> group })
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -529,7 +562,7 @@ class OperatorsTest {
                 .groupBy({ it % 2 }) { _, group -> group }
                 .take(1))
                 .emitsCount(1)
-                .completed()
+                .completes()
         }
 
         @Test
@@ -541,7 +574,7 @@ class OperatorsTest {
                     group.doOnComplete { completedGroups.add(key) }.map { key }
                 })
                 .emitsCount(6)
-                .completesNormally()
+                .completes()
             assertEquals(setOf(0, 1, 2), completedGroups)
         }
 
@@ -560,7 +593,7 @@ class OperatorsTest {
                     group.doOnError { erroredGroups.add(key) }.recover { Many.empty() }
                 }
                 .recover { Many.empty() })
-                .completesNormally()
+                .completes()
             assertEquals(setOf(0, 1), erroredGroups)
         }
 
@@ -575,7 +608,7 @@ class OperatorsTest {
                     .map { it.sorted() }
             )
                 .emitsNext(listOf(20, 40, 100, 300))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -585,7 +618,7 @@ class OperatorsTest {
         fun `switchMap emits from latest inner stream only`() {
             val source = Many.items(1, 2, 3)
             val result = source.switchMap { Many.items(it * 10) }.toList().map { it.last() }
-            Verify.that(result).emitsNext(30).completesNormally()
+            Verify.that(result).emitsNext(30).completes()
         }
 
         @Test
@@ -593,13 +626,13 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).switchMap { Many.items(it) })
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
         fun `switchMap completes on empty source`() {
             Verify.that(Many.empty<Int>().switchMap { Many.items(it) })
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -609,7 +642,7 @@ class OperatorsTest {
         fun `flatMapSequential preserves order`() {
             Verify.that(Many.items(1, 2, 3).flatMapSequential { Many.items(it, it * 10) })
                 .emitsNext(1, 10, 2, 20, 3, 30)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -622,7 +655,7 @@ class OperatorsTest {
         @Test
         fun `flatMapSequential on empty source completes`() {
             Verify.that(Many.empty<Int>().flatMapSequential { Many.items(it) })
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -635,7 +668,7 @@ class OperatorsTest {
                     .doOnComplete { completeCount++ }
             )
                 .emitsNext(1, 2)
-                .completesNormally()
+                .completes()
             assertEquals(1, completeCount, "Complete must be signalled exactly once")
         }
     }
@@ -649,14 +682,14 @@ class OperatorsTest {
                 Many.never<Int>().takeUntilOther(
                     Many.defer(factory = suspend { other.complete(); other.asMany() })
                 )
-            ).completesNormally()
+            ).completes()
         }
 
         @Test
         fun `takeUntilOther completes normally when source completes first`() {
             Verify.that(Many.items(1, 2, 3).takeUntilOther(Many.never<Unit>()))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -666,7 +699,7 @@ class OperatorsTest {
         fun `delaySubscription waits for trigger then emits source`() {
             Verify.that(Many.items(1, 2, 3).delaySubscription(Many.items(Unit)))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -674,40 +707,40 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.items(1, 2).delaySubscription(Many.error<Unit>(cause)))
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
         fun `One delaySubscription emits value after delay`() {
             Verify.that(One.single(42).delaySubscription(10.milliseconds))
                 .emitsNext(42)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `One delaySubscription with trigger emits value after trigger`() {
             Verify.that(One.single(7).delaySubscription(Many.items(Unit)))
                 .emitsNext(7)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `Maybe delaySubscription emits present value after delay`() {
             Verify.that(Maybe.present(99).delaySubscription(10.milliseconds))
                 .assertNext { assertEquals(99, it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `Maybe delaySubscription on empty completes empty after delay`() {
             Verify.that(Maybe.empty<Int>().delaySubscription(10.milliseconds))
-                .completesEmpty()
+                .emitsCount(0).completes()
         }
 
         @Test
         fun `None delaySubscription completes after delay`() {
             Verify.that(None.complete<Unit>().delaySubscription(10.milliseconds))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -717,7 +750,7 @@ class OperatorsTest {
         fun `onBackpressureDrop completes normally on small source`() {
             Verify.that(Many.items(1, 2, 3).onBackpressureDrop())
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -725,7 +758,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).onBackpressureDrop())
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -737,7 +770,7 @@ class OperatorsTest {
             val items = listOf(Item(1, "a"), Item(1, "b"), Item(2, "c"), Item(2, "d"), Item(1, "e"))
             Verify.that(Many.from(items).distinctUntilChangedBy { it.key })
                 .emitsNext(Item(1, "a"), Item(2, "c"), Item(1, "e"))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -750,7 +783,7 @@ class OperatorsTest {
                 .doOnSubscribe { fired.add("subscribed") }
                 .doOnNext { fired.add("item") })
                 .emitsCount(3)
-                .completesNormally()
+                .completes()
             assertEquals("subscribed", fired.first())
         }
     }
@@ -762,7 +795,7 @@ class OperatorsTest {
             var terminal: Signal.Terminal? = null
             Verify.that(Many.items(1, 2).doFinally { terminal = it })
                 .emitsCount(2)
-                .completesNormally()
+                .completes()
             assertIs<Signal.Upstream.Complete>(terminal)
         }
 
@@ -772,7 +805,7 @@ class OperatorsTest {
             var terminal: Signal.Terminal? = null
             Verify.that(Many.error<Int>(cause).doFinally { terminal = it })
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
             assertIs<Signal.Upstream.Error>(terminal)
         }
 
@@ -791,21 +824,21 @@ class OperatorsTest {
             val source = Many.items(1, 2, 3, 4)
             Verify.that(source.bufferTimeout(2, 5.seconds))
                 .emitsNext(listOf(1, 2), listOf(3, 4))
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `bufferTimeout flushes partial bucket on source complete`() {
             Verify.that(Many.items(1, 2, 3).bufferTimeout(10, 5.seconds))
                 .emitsNext(listOf(1, 2, 3))
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `bufferTimeout flushes on timeout`() {
             Verify.that(Many.items(1).bufferTimeout(100, 50.milliseconds))
                 .emitsNext(listOf(1))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -816,7 +849,7 @@ class OperatorsTest {
             val numbers = Many.items(1, 2)
             val letters = Many.items("a", "b")
             val result  = combineLatest(numbers, letters) { n, s -> "$n$s" }.toList().map { it.last() }
-            Verify.that(result).emitsNext("2b").completesNormally()
+            Verify.that(result).emitsNext("2b").completes()
         }
 
         @Test
@@ -824,7 +857,7 @@ class OperatorsTest {
             val empty   = Many.empty<Int>()
             val letters = Many.items("a")
             Verify.that(combineLatest(empty, letters) { n, s -> "$n$s" })
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -836,7 +869,7 @@ class OperatorsTest {
             val other = One.single("a")
             Verify.that(zip(one, other) { n, s -> "$n$s" })
                 .emitsNext("1a")
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -854,7 +887,7 @@ class OperatorsTest {
             val first  = One.error<Int>(cause)
             val second = One.single("a")
             Verify.that(zip(first, second) { n, s -> "$n$s" })
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -862,14 +895,14 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(zip(One.single(1), One.error<String>(cause)) { n, s -> "$n$s" })
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
         fun `zipWith is alias for zip`() {
             Verify.that(One.single(2).zipWith(One.single(3)) { a, b -> a + b })
                 .emitsNext(5)
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -887,7 +920,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(One.error<Int>(cause).flatMapNone { None.complete<Unit>() })
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -919,14 +952,14 @@ class OperatorsTest {
         fun `publishOn does not lose items`() {
             Verify.that(Many.items(1, 2, 3).publishOn(Dispatchers.Default))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `subscribeOn does not lose items`() {
             Verify.that(Many.items(1, 2, 3).subscribeOn(Dispatchers.Default))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -936,13 +969,13 @@ class OperatorsTest {
         fun `reduce accumulates all items`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).reduce { a, b -> a + b })
                 .emitsNext(15)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `reduce on empty returns NoSuchElementException`() {
             Verify.that(Many.empty<Int>().reduce { a, b -> a + b })
-                .failedWith<NoSuchElementException>()
+                .failsWith<NoSuchElementException>()
         }
 
         @Test
@@ -950,7 +983,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).reduce { a, b -> a + b })
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -960,7 +993,7 @@ class OperatorsTest {
         fun `interval emits incrementing longs starting at zero`() {
             Verify.that(Many.interval(10.milliseconds).take(3))
                 .emitsNext(0L, 1L, 2L)
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -970,14 +1003,14 @@ class OperatorsTest {
         fun `buffer with skip equal to size is same as buffer by size`() {
             Verify.that(Many.items(1, 2, 3, 4).buffer(2, 2))
                 .emitsNext(listOf(1, 2), listOf(3, 4))
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `buffer with skip greater than size creates gaps`() {
             Verify.that(Many.items(1, 2, 3, 4, 5).buffer(2, 3))
                 .emitsNext(listOf(1, 2), listOf(4, 5))
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -997,7 +1030,7 @@ class OperatorsTest {
             val emitter  = None.defer<Int> { sink.emit(1); sink.emit(2); sink.complete() }.toMany()
             Verify.that(merge(sink.asMany(), emitter))
                 .emitsNext(1, 2)
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -1007,7 +1040,7 @@ class OperatorsTest {
             sink.emit(2)
             sink.emit(3)
             sink.complete()
-            Verify.that(sink.asMany()).completesNormally()
+            Verify.that(sink.asMany()).completes()
         }
 
         @Test
@@ -1016,7 +1049,7 @@ class OperatorsTest {
             sink.emit(1)
             sink.emit(2)
             sink.complete()
-            Verify.that(sink.asMany()).emitsNext(1, 2).completesNormally()
+            Verify.that(sink.asMany()).emitsNext(1, 2).completes()
         }
 
         @Test
@@ -1026,14 +1059,14 @@ class OperatorsTest {
             sink.emit(2)
             sink.emit(3)
             sink.complete()
-            Verify.that(sink.asMany()).emitsNext(2, 3).completesNormally()
+            Verify.that(sink.asMany()).emitsNext(2, 3).completes()
         }
 
         @Test
         fun `sink complete is delivered to subscriber`() {
             val sink = Sinks.broadcast<Int>()
             sink.complete()
-            Verify.that(sink.asMany()).completesNormally()
+            Verify.that(sink.asMany()).completes()
         }
 
         @Test
@@ -1041,7 +1074,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             val sink  = Sinks.broadcast<Int>()
             sink.error(cause)
-            Verify.that(sink.asMany()).failedWith<InvalidDemandException> { assertEquals(cause, it) }
+            Verify.that(sink.asMany()).failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -1052,7 +1085,7 @@ class OperatorsTest {
             val sub2    = sink.asMany()
             Verify.that(merge(sub1, sub2, emitter).toList().map { it.sorted() })
                 .emitsNext(listOf(1, 1, 2, 2))
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -1073,7 +1106,7 @@ class OperatorsTest {
                     assertEquals(3, attempt)
                     assertEquals(2, retryCount)
                 }
-                .completesNormally()
+                .completes()
         }
 
         @Test
@@ -1081,7 +1114,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(Maybe.error<Int>(cause).retry(times = 2))
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
@@ -1091,7 +1124,7 @@ class OperatorsTest {
             val signalsCompleteAfterRetries = Maybe.defer { if (retries < 1) throw InvalidDemandException(-1) }
                 .doOnRetry { _,_ -> retries++ }.retry(times = 1)
                 .doOnComplete { if(!completed) completed = true else throw IllegalStateException("only once") }
-            Verify.that(signalsCompleteAfterRetries).completesNormally()
+            Verify.that(signalsCompleteAfterRetries).completes()
             assertTrue(completed, "onComplete must be signalled to direct subscribers after successful retry")
             assertEquals(1, retries)
         }
@@ -1106,7 +1139,7 @@ class OperatorsTest {
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
             }.retry(times = 3))
-                .completesNormally()
+                .completes()
             assertEquals(3, attempts)
         }
 
@@ -1115,7 +1148,7 @@ class OperatorsTest {
             val cause = InvalidDemandException(-1)
             Verify.that(None.error<Unit>(cause).retry(times = 2))
 
-                .failedWith<InvalidDemandException> { assertEquals(cause, it) }
+                .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
     }
 
@@ -1123,14 +1156,14 @@ class OperatorsTest {
 
         @Test
         fun `aborted pipeline does not deliver items`() {
-            Verify.that(Many.items(1, 2, 3)).aborted()
+            Verify.that(Many.items(1, 2, 3).take(0)).cancels()
         }
 
         @Test
         fun `completed pipeline delivers all items`() {
             Verify.that(Many.items(1, 2, 3))
                 .emitsNext(1, 2, 3)
-                .completed()
+                .completes()
         }
     }
 
@@ -1139,46 +1172,46 @@ class OperatorsTest {
         @Test
         fun `Many timeout fires when stream does not complete in time`() {
             Verify.that(Many.never<Int>().timeout(50.milliseconds))
-                .timesOut()
+                .failsWith<TimeoutException>()
         }
 
         @Test
         fun `Many timeout passes through when stream completes in time`() {
             Verify.that(Many.items(1, 2, 3).timeout(5.seconds))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `One timeout fires when value does not arrive in time`() {
             Verify.that(One.never<Int>().timeout(50.milliseconds))
-                .timesOut()
+                .failsWith<TimeoutException>()
         }
 
         @Test
         fun `One timeout passes through when value arrives in time`() {
             Verify.that(One.single(42).timeout(5.seconds))
                 .assertNext { assertEquals(42, it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `Maybe timeout fires when neither value nor empty arrives in time`() {
             Verify.that(Maybe.never<Int>().timeout(50.milliseconds))
-                .timesOut()
+                .failsWith<TimeoutException>()
         }
 
         @Test
         fun `Maybe timeout passes through present value in time`() {
             Verify.that(Maybe.present(7).timeout(5.seconds))
                 .assertNext { assertEquals(7, it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test
         fun `Maybe timeout passes through empty completion in time`() {
             Verify.that(Maybe.empty<Int>().timeout(5.seconds))
-                .completesEmpty()
+                .emitsCount(0).completes()
         }
 
         @Test
@@ -1188,7 +1221,57 @@ class OperatorsTest {
                 .timeout(100.milliseconds)
                 .concatMap(transform = slow))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
+        }
+    }
+
+    class Scan {
+
+        @Test
+        fun `scan accumulates running total`() {
+            Verify.that(Many.items(1, 2, 3, 4).scan(0) { acc, item -> acc + item })
+                .emitsNext(1, 3, 6, 10)
+                .completes()
+        }
+
+        @Test
+        fun `scan on empty source emits nothing`() {
+            Verify.that(Many.empty<Int>().scan(0) { acc, item -> acc + item })
+                .completes()
+        }
+
+        @Test
+        fun `scan propagates error`() {
+            Verify.that(Many.items(1, 2).scan(0) { _, _ -> throw InvalidDemandException(-1) })
+                .failsWith<InvalidDemandException>()
+        }
+    }
+
+    class FlatMapOne {
+
+        @Test
+        fun `flatMapOne maps each item through a One`() {
+            Verify.that(Many.items(1, 2, 3).flatMapOne { One.single(it * 10) })
+                .emitsNext(10, 20, 30)
+                .completes()
+        }
+
+        @Test
+        fun `flatMapOne on empty source emits nothing`() {
+            Verify.that(Many.empty<Int>().flatMapOne { One.single(it) })
+                .completes()
+        }
+
+        @Test
+        fun `flatMapOne propagates error from source`() {
+            Verify.that(Many.error<Int>(InvalidDemandException(-1)).flatMapOne { One.single(it) })
+                .failsWith<InvalidDemandException>()
+        }
+
+        @Test
+        fun `flatMapOne propagates error from inner One`() {
+            Verify.that(Many.items(1).flatMapOne { One.error<Int>(InvalidDemandException(-1)) })
+                .failsWith<InvalidDemandException>()
         }
     }
 }

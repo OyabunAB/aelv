@@ -212,7 +212,7 @@ class PipelinesTest {
         fun `None pipelineFrom resolves when driven via Many source`() {
             val source   = Many.items(1, 2, 3)
             val pipeline = Many.pipelineFrom<Int>().discard()
-            Verify.that(source.applyTo(pipeline)).completesNormally()
+            Verify.that(source.applyTo(pipeline)).completes()
         }
     }
 

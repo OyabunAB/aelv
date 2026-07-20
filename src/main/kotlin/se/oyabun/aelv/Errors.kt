@@ -133,3 +133,25 @@ class NoSuchElementException :
 /** Signals that a [One.await] call did not receive a value within the specified duration. */
 class TimeoutException(timeout: kotlin.time.Duration) :
     AelvException("await timed out after $timeout")
+
+/** Base class for all assertion failures thrown by [Verify]. */
+sealed class VerifyAssertionError(message: String, cause: Throwable? = null) : AssertionError(message, cause)
+
+/** Thrown when the stream terminated with the wrong [Signal.Terminal]. */
+class UnexpectedTerminalError(expected: String, got: Signal.Terminal) :
+    VerifyAssertionError(
+        when (got) {
+            Signal.Upstream.Complete -> "expected $expected but stream completed normally"
+            Signal.Downstream.Cancel -> "expected $expected but stream was cancelled"
+            is Signal.Upstream.Error -> "expected $expected but got error: ${got.cause.message}"
+        },
+        if (got is Signal.Upstream.Error) got.cause else null,
+    )
+
+/** Thrown when the error type does not match the expected type in [Verify.failedWith]. */
+class UnexpectedErrorTypeError(expected: Class<*>, got: Exception) :
+    VerifyAssertionError("expected ${expected.simpleName} but got ${got::class.simpleName}: ${got.message}")
+
+/** Thrown when [Verify.assertNext] or [Verify.emitsNext] receives an unexpected value. */
+class UnexpectedValueError(message: String) : VerifyAssertionError(message)
+

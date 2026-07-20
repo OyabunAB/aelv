@@ -17,117 +17,85 @@ package se.oyabun.aelv
 
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 class Verify<T : Any, S : Observable<T, S>> private constructor(
-    private val source:   S,
-    private val pipeline: Observable<T, *>,
-    private val context:  CoroutineContext = EmptyCoroutineContext,
+    private val source:     S,
+    private val pipeline:   Observable<T, *>,
+    private val context:    CoroutineContext = EmptyCoroutineContext,
+    private val assertions: List<(List<T>) -> Unit> = emptyList(),
 ) {
 
     fun assertNext(assertion: (T) -> Unit): Verify<T, S> =
-        Verify(
-            source,
-            pipeline.toMany()
-                .firstMaybe()
-                .or { error("expected at least one item but stream was empty") }
-                .map { value -> assertion(value); value }
-                .toMany(),
-            context,
-        )
+        Verify(source, pipeline, context, assertions + { items ->
+            if (items.isEmpty()) throw UnexpectedValueError("expected at least one item but stream was empty")
+            assertion(items.first())
+        })
 
     fun emitsNext(vararg values: T): Verify<T, S> =
-        Verify(
-            source,
-            pipeline.toMany()
-                .take(values.size.toLong())
-                .fold(emptyList<T>()) { acc, item -> acc + item }
-                .map { actual ->
-                    check(actual == values.toList()) { "expected ${values.toList()} but got $actual" }
-                    actual
-                }
-                .flatMapMany { Many.empty() },
-            context,
-        )
+        Verify(source, pipeline, context, assertions + { items ->
+            val actual = items.take(values.size)
+            if (actual != values.toList()) throw UnexpectedValueError("expected ${values.toList()} but got $actual")
+        })
 
     fun emitsCount(count: Long): Verify<T, S> =
-        Verify(
-            source,
-            pipeline.toMany()
-                .fold(0L) { acc, _ -> acc + 1 }
-                .map { actual -> check(actual == count) { "expected $count items but got $actual" }; actual }
-                .flatMapMany { Many.empty() },
-            context,
-        )
+        Verify(source, pipeline, context, assertions + { items ->
+            if (items.size.toLong() != count) throw UnexpectedValueError("expected $count items but got ${items.size}")
+        })
 
-    private fun terminatesWith(expected: Signal.Terminal, within: Duration) {
-        var signal: Signal.Terminal? = null
-        val observed: Observable<T, *> = source.doFinally { signal = it }
-        val result = runBlocking(context + CoroutineName("verify")) {
-            if (expected is Signal.Downstream.Cancel) {
-                observed.toMany().take(0).discard().thenReturn(Unit).await(within)
-            } else {
-                observed.discard().thenReturn(Unit).await(within)
+    private fun runPipeline(within: Duration): Signal.Terminal {
+        val items = mutableListOf<T>()
+        val terminal = runBlocking(context + CoroutineName("verify")) {
+            withTimeout(within) {
+                var terminal: Signal.Terminal = Signal.Downstream.Cancel
+                pipeline.source(
+                    { value -> items.add(value); Signal.Downstream.Request },
+                    { terminal = Signal.Upstream.Complete },
+                    { issue -> terminal = Signal.Upstream.Error(issue) },
+                )
+                terminal
             }
         }
-        when (expected) {
-            is Signal.Upstream.Error -> if (result is Success) throw AssertionError("expected error but stream completed normally")
-            else -> result.fold(
-                onLeft  = { throw AssertionError("expected normal termination but got error: ${it.message}", it) },
-                onRight = { },
-            )
-        }
-        check(signal == expected) { "expected terminal $expected but got: $signal" }
+        assertions.forEach { it(items) }
+        return terminal
     }
 
-    fun completed(within: Duration = DEFAULT_TIMEOUT) = terminatesWith(Signal.completed, within)
-    fun aborted(within: Duration = DEFAULT_TIMEOUT)   = terminatesWith(Signal.cancelled, within)
-
-    fun failed(within: Duration = DEFAULT_TIMEOUT) {
-        val result = runBlocking(context + CoroutineName("verify")) {
-            source.discard().thenReturn(Unit).await(within)
+    fun completes(within: Duration = DEFAULT_TIMEOUT) =
+        when (val s = runPipeline(within)) {
+            Signal.Upstream.Complete -> Unit
+            else                     -> throw UnexpectedTerminalError("Complete", s)
         }
-        if (result is Success) throw AssertionError("expected error but stream completed normally")
-    }
 
-    inline fun <reified X : Exception> failedWith(within: Duration = DEFAULT_TIMEOUT, noinline assertions: (X) -> Unit = {}) =
-        failedWith(X::class.java, within, assertions)
+    fun cancels(within: Duration = DEFAULT_TIMEOUT) =
+        when (val s = runPipeline(within)) {
+            Signal.Downstream.Cancel -> Unit
+            else                     -> throw UnexpectedTerminalError("Cancel", s)
+        }
+
+    fun fails(within: Duration = DEFAULT_TIMEOUT) =
+        when (val s = runPipeline(within)) {
+            is Signal.Upstream.Error -> Unit
+            else                     -> throw UnexpectedTerminalError("Error", s)
+        }
+
+    inline fun <reified X : Exception> failsWith(within: Duration = DEFAULT_TIMEOUT, noinline assertions: (X) -> Unit = {}) =
+        failsWith(X::class.java, within, assertions)
 
     @Suppress("UNCHECKED_CAST")
-    fun <X : Exception> failedWith(type: Class<X>, within: Duration = DEFAULT_TIMEOUT, assertions: (X) -> Unit = {}) {
-        val result = runBlocking(context + CoroutineName("verify")) {
-            source.discard().thenReturn(Unit).await(within)
+    fun <X : Exception> failsWith(type: Class<X>, within: Duration = DEFAULT_TIMEOUT, assertions: (X) -> Unit = {}) =
+        when (val s = runPipeline(within)) {
+            is Signal.Upstream.Error -> {
+                if (!type.isInstance(s.cause)) throw UnexpectedErrorTypeError(type, s.cause)
+                assertions(type.cast(s.cause))
+            }
+            else -> throw UnexpectedTerminalError(type.simpleName, s)
         }
-        if (result is Success) throw AssertionError("expected error but stream completed normally")
-        val cause = (result as Failure).value
-        if (!type.isInstance(cause)) throw AssertionError("expected ${type.simpleName} but got ${cause::class.simpleName}: ${cause.message}")
-        assertions(type.cast(cause))
-    }
 
-    fun timesOut(within: Duration = DEFAULT_TIMEOUT) = failedWith<TimeoutException>(within)
-
-    fun completesEmpty(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
-        source.toMany()
-            .flatMapNone { value: T -> None.error<T>(IllegalStateException("expected empty but got: $value")) }
-            .thenReturn(Unit)
-            .await(within)
-            .fold(
-                onLeft  = { throw AssertionError("expected empty completion but got error: ${it.message}", it) },
-                onRight = { },
-            )
-    }
-
-    fun completesNormally(within: Duration = DEFAULT_TIMEOUT) = runBlocking(context + CoroutineName("verify")) {
-        pipeline.discard().thenReturn(Unit).await(within).fold(
-            onLeft  = { throw AssertionError("expected normal completion but got error: ${it.message}", it) },
-            onRight = { },
-        )
-    }
-
-    fun verify(within: Duration = DEFAULT_TIMEOUT) = completesNormally(within)
+    fun timesOut(within: Duration = DEFAULT_TIMEOUT) = failsWith<TimeoutException>(within)
 
     companion object {
         val DEFAULT_TIMEOUT = 5.seconds

@@ -27,14 +27,14 @@ class VerifyTest {
         @Test fun `matches items in order`() {
             Verify.that(Many.items(1, 2, 3))
                 .emitsNext(1, 2, 3)
-                .completesNormally()
+                .completes()
         }
 
         @Test fun `fails on wrong value`() {
             assertFailsWith<AssertionError> {
                 Verify.that(Many.items(1, 2, 3))
                     .emitsNext(1, 99, 3)
-                    .completesNormally()
+                    .completes()
             }
         }
 
@@ -42,7 +42,7 @@ class VerifyTest {
             assertFailsWith<AssertionError> {
                 Verify.that(Many.items(1))
                     .emitsNext(1, 2)
-                    .completesNormally()
+                    .completes()
             }
         }
     }
@@ -52,13 +52,13 @@ class VerifyTest {
         @Test fun `accepts exactly n items`() {
             Verify.that(Many.items(1, 2, 3))
                 .emitsCount(3)
-                .completesNormally()
+                .completes()
         }
 
         @Test fun `accepts zero items on empty stream`() {
             Verify.that(Many.empty<Int>())
                 .emitsCount(0)
-                .completesNormally()
+                .completes()
         }
     }
 
@@ -67,14 +67,14 @@ class VerifyTest {
         @Test fun `assertion passes for matching item`() {
             Verify.that(Many.items(42))
                 .assertNext { assertIs<Int>(it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test fun `assertion failure propagates`() {
             assertFailsWith<AssertionError> {
                 Verify.that(Many.items(1))
                     .assertNext { assertEquals(99, it) }
-                    .completesNormally()
+                    .completes()
             }
         }
     }
@@ -82,26 +82,26 @@ class VerifyTest {
     class AbortedTest {
 
         @Test fun `aborted verifies upstream cancel signal`() {
-            Verify.that(Many.items(1, 2, 3)).aborted()
+            Verify.that(Many.items(1, 2, 3).take(0)).cancels()
         }
     }
 
     class CompletesNormallyTest {
 
         @Test fun `passes on empty stream`() {
-            Verify.that(Many.empty<Int>()).completesNormally()
+            Verify.that(Many.empty<Int>()).completes()
         }
 
         @Test fun `passes after all items consumed`() {
             Verify.that(Many.items(1, 2))
                 .emitsNext(1, 2)
-                .completesNormally()
+                .completes()
         }
 
         @Test fun `fails when stream errors`() {
             assertFailsWith<AssertionError> {
                 Verify.that(Many.error<Int>(RuntimeException("boom")))
-                    .completesNormally()
+                    .completes()
             }
         }
     }
@@ -110,14 +110,14 @@ class VerifyTest {
 
         @Test fun `returns the error`() {
             val cause = RuntimeException("fail")
-            Verify.that(Many.error<Int>(cause)).failedWith<RuntimeException> {
+            Verify.that(Many.error<Int>(cause)).failsWith<RuntimeException> {
                 assertEquals("fail", it.message)
             }
         }
 
         @Test fun `fails when stream completes normally`() {
             assertFailsWith<AssertionError> {
-                Verify.that(Many.empty<Int>()).failed()
+                Verify.that(Many.empty<Int>()).fails()
             }
         }
     }
@@ -125,7 +125,7 @@ class VerifyTest {
     class CompletedTest {
 
         @Test fun `completed verifies natural completion signal`() {
-            Verify.that(Many.items(1, 2, 3)).emitsNext(1, 2, 3).completed()
+            Verify.that(Many.items(1, 2, 3)).emitsNext(1, 2, 3).completes()
         }
     }
 
@@ -134,14 +134,14 @@ class VerifyTest {
         @Test fun `passes when Maybe has value satisfying assertion`() {
             Verify.that(Maybe.present(42))
                 .assertNext { assertEquals(42, it) }
-                .completesNormally()
+                .completes()
         }
 
         @Test fun `fails when Maybe is empty`() {
             assertFailsWith<AssertionError> {
                 Verify.that(Maybe.empty<Int>())
                     .assertNext { }
-                    .completesNormally()
+                    .completes()
             }
         }
     }
@@ -149,12 +149,12 @@ class VerifyTest {
     class CompletesEmptyTest {
 
         @Test fun `passes when Maybe is empty`() {
-            Verify.that(Maybe.empty<Int>()).completesEmpty()
+            Verify.that(Maybe.empty<Int>()).emitsCount(0).completes()
         }
 
         @Test fun `fails when Maybe has value`() {
-            assertFailsWith<AssertionError> {
-                Verify.that(Maybe.present(1)).completesEmpty()
+            assertFailsWith<UnexpectedValueError> {
+                Verify.that(Maybe.present(1)).emitsCount(0).completes()
             }
         }
     }
