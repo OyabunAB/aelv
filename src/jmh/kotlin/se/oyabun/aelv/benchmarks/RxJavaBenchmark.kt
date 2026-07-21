@@ -59,6 +59,12 @@ open class RxJavaBenchmark {
             .toList().blockingGet().size
 
     @Benchmark
+    fun flatMapSequential_toList(): Int =
+        Observable.range(0, size / 10)
+            .concatMapEager { i -> Observable.just(i, i + 1, i + 2) }
+            .toList().blockingGet().size
+
+    @Benchmark
     fun flatMap_toList(): Int =
         Observable.range(0, size / 10)
             .flatMap { i -> Observable.just(i, i + 1, i + 2) }

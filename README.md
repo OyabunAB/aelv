@@ -231,20 +231,21 @@ TCK-verified. `Many` passes all applicable RS Publisher specs. `One` passes all 
 
 aelv implements a synchronous fusion protocol for fused pipelines — when the entire chain from
 source to terminal is synchronous, the coroutine callback machinery is bypassed in favour of a
-tight poll loop. On fused benchmarks RxJava currently leads; aelv is competitive and ahead of
-Mutiny and Reactor on all fused operations. aelv ties RxJava on `concatMap` and leads all
-libraries on deep recursive flat-map due to its work-deque interpreter (O(1) JVM stack depth).
+tight poll loop. aelv leads on `baseline_toList`, `take_toList`, and `fold_sum`; RxJava leads on
+`map`, `filter`, `chain`, and concurrent `flatMap`. aelv leads all libraries on deep recursive
+flat-map due to its work-deque interpreter (O(1) JVM stack depth).
 
 | Benchmark | aelv | RxJava | Mutiny | Reactor | Monix |
 |---|---:|---:|---:|---:|---:|
-| baseline_toList | 92 | **165** | 119 | 49 | 30 |
-| map_toList | 76 | **114** | 61 | 46 | 26 |
-| filter_toList | 125 | **208** | 91 | 81 | 32 |
-| take_toList | 211 | **223** | 98 | 96 | 34 |
-| fold_sum | 101 | **154** | 97 | 48 | 42 |
-| chain (map→filter→take) | 170 | **277** | 134 | 98 | 36 |
-| concatMap_toList | **69** | **69** | 77 | 58 | 32 |
-| flatMap_concurrent | 20 | **99** | 40 | 55 | 28 |
+| baseline_toList | **186** | 165 | 119 | 49 | 30 |
+| map_toList | 100 | **114** | 61 | 46 | 26 |
+| filter_toList | 174 | **208** | 91 | 81 | 32 |
+| take_toList | **230** | 223 | 98 | 96 | 34 |
+| fold_sum | **154** | **154** | 97 | 48 | 42 |
+| chain (map→filter→take) | 220 | **277** | 134 | 98 | 36 |
+| concatMap_toList | 59 | 69 | **77** | 58 | 32 |
+| flatMap_sequential | 57 | **136** | 92 | 83 | 37 |
+| flatMap_concurrent | 23 | **99** | 40 | 55 | 28 |
 
 *ops/ms on 1000 items, JMH throughput mode, OpenJDK 21, Intel i9-8950HK. See [BENCHMARKS.md](BENCHMARKS.md) for methodology.*
 

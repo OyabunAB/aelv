@@ -35,31 +35,39 @@ java -jar build/libs/aelv-*-jmh.jar -wi 3 -i 5 -f 1 -p size=1000 -tu ms
 
 ## Results
 
+aelv numbers re-measured for 1.0.0 (2 warmup × 5 s, 3 measurement × 5 s). Competitor numbers
+from the original run (3 warmup × 10 s, 5 measurement × 10 s) on the same machine.
+
 | Benchmark | aelv | RxJava | Mutiny | Reactor | Monix |
 |---|---:|---:|---:|---:|---:|
-| baseline_toList | 92 | **165** | 119 | 49 | 30 |
-| map_toList | 76 | **114** | 61 | 46 | 26 |
-| filter_toList | 125 | **208** | 91 | 81 | 32 |
-| take_toList | 211 | **223** | 98 | 96 | 34 |
-| fold_sum | 101 | **154** | 97 | 48 | 42 |
-| chain (map→filter→take) | 170 | **277** | 134 | 98 | 36 |
-| concatMap_toList | **69** | **69** | 77 | 58 | 32 |
-| flatMap_sequential | **57** | — | — | — | — |
-| flatMap_concurrent | 20 | **99** | 40 | 55 | 28 |
+| baseline_toList | **186** | 165 | 119 | 49 | 30 |
+| map_toList | 100 | **114** | 61 | 46 | 26 |
+| filter_toList | 174 | **208** | 91 | 81 | 32 |
+| take_toList | **230** | 223 | 98 | 96 | 34 |
+| fold_sum | **154** | **154** | 97 | 48 | 42 |
+| chain (map→filter→take) | 220 | **277** | 134 | 98 | 36 |
+| concatMap_toList | 59 | 69 | **77** | 58 | 32 |
+| flatMap_sequential | **57** | **136** | 92 | 83 | 37 |
+| flatMap_concurrent | 23 | **99** | 40 | 55 | 28 |
 
-*ops/ms — higher is better.*
+*ops/ms — higher is better. flatMap_sequential: RxJava=concatMapEager, Reactor=flatMapSequential, Mutiny/Monix=concatMap (no concurrent-ordered variant).*
 
 ## Notes
 
 **Fused pipelines** (`baseline`, `map`, `filter`, `take`, `fold`, `chain`) activate aelv's
 synchronous fusion protocol. When the entire chain from source to terminal is synchronous, aelv
 bypasses the coroutine callback machinery and runs a tight poll loop — no state machine transitions,
-no signal allocations. On this machine RxJava leads the fused benchmarks; aelv is competitive and
-ahead of Mutiny and Reactor on all fused operations.
+no signal allocations. aelv leads on `baseline`, `take`, and `fold`; RxJava leads on `map`,
+`filter`, and `chain`.
 
 **`concatMap`** aelv uses the interpreter's work-deque for sequential flat-map, removing
-the per-inner-stream coroutine allocation. aelv and RxJava tie at 69 ops/ms; Mutiny is slightly
-ahead at 77 ops/ms on this run.
+the per-inner-stream coroutine allocation. Mutiny leads at 77 ops/ms on this run; RxJava and
+aelv follow closely.
+
+**`flatMapSequential`** benchmarks concurrent-eager-ordered flat-map. Reactor uses
+`flatMapSequential`, RxJava uses `concatMapEager`. Mutiny and Monix have no concurrent-ordered
+variant — their benchmarks use `concatMap` (sequential); since the inner streams here are
+synchronous, the distinction does not affect throughput. RxJava leads at 136 ops/ms.
 
 **`flatMap_concurrent`** launches inner streams inline (no `launch`, serialised via `Mutex`).
 RxJava's advantage here is its lock-free drain loop. For real IO-bound workloads where inner
