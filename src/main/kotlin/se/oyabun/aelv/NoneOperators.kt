@@ -24,8 +24,6 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import org.reactivestreams.Publisher
 
-private val log = Logging.of<None<*>>()
-
 /**
  * Sequences this [None] with a [One] producer: awaits completion of the [None], then subscribes
  * to the [One] returned by [producer].
@@ -34,7 +32,7 @@ private val log = Logging.of<None<*>>()
  * primary way to chain a fire-and-forget step before a value-producing step without nesting.
  */
 @OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
+fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> One<R>): One<R> =
     One.generate { emit ->
         val result = await()
         if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
@@ -50,7 +48,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> One<R>): One<R> =
  * completes without error; an error in the [None] is forwarded and [producer] is skipped.
  */
 @OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> =
+fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> Maybe<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         val result = await()
         if (result is Failure) { onError(result.value); return@Maybe }
@@ -63,7 +61,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Maybe<R>): Maybe<R> 
  * [producer].
  */
 @OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
+fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> Many<R>): Many<R> =
     Many.generate { emit ->
         val result = await()
         if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
@@ -79,7 +77,7 @@ fun <T : Any, R : Any> None<T>.then(producer: suspend () -> Many<R>): Many<R> =
  * Any error from either step is rethrown, short-circuiting the second step if the first fails.
  */
 @OverloadResolutionByLambdaReturnType
-fun <T : Any, R : Any> None<T>.then(producer: suspend () -> None<R>): None<R> =
+fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> None<R>): None<R> =
     None.generate {
         val result = await()
         if (result is Failure) throw result.value

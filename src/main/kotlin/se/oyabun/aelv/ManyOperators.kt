@@ -25,6 +25,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
@@ -33,6 +34,12 @@ import kotlin.time.Duration
 import org.reactivestreams.Publisher
 
 private val log = Logging.of<Many<*>>()
+
+private sealed interface TimerState {
+    data object Idle                : TimerState
+    data class  Running(val job: Job) : TimerState
+    fun cancel() = if (this is Running) job.cancel() else Unit
+}
 
 fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
     val currentFusion = fusion
@@ -193,7 +200,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
     transform: suspend (T) -> Many<R>,
 ): Many<R> = Many.generate { emit ->
     val semaphore = Semaphore(concurrency)
-    val mutex = kotlinx.coroutines.sync.Mutex()
+    val mutex = Mutex()
     var cancelled = false
     var outerError: Any = Unset
     coroutineScope {
@@ -266,56 +273,59 @@ fun <T : Any, R : Any> Many<T>.concatMap(transform: suspend (T) -> Many<R>): Man
 fun <T : Any, R : Any> Many<T>.flatMapSequential(
     maxConcurrency: Int = 256,
     transform: (T) -> Many<R>,
-): Many<R> = if (maxConcurrency == 1) concatMap(transform) else Many.generate { emit ->
+): Many<R> {
     require(maxConcurrency > 0) { "maxConcurrency must be positive, got $maxConcurrency" }
-    val semaphore = Semaphore(maxConcurrency)
-    val orderChannel = Channel<Channel<Signal.Upstream<R>>>(maxConcurrency)
-    coroutineScope {
-        val producerJob = launch {
-            var outerError: Any = Unset
-            source(
-                { value ->
-                    val innerChannel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
-                    orderChannel.send(innerChannel)
-                    launch {
-                        semaphore.withPermit {
-                            transform(value).source(
-                                { inner -> innerChannel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
-                                { innerChannel.close() },
-                                { issue -> innerChannel.close(issue) },
-                            )
+    if (maxConcurrency == 1) return concatMap(transform)
+    return Many.generate { emit ->
+        val semaphore = Semaphore(maxConcurrency)
+        val orderChannel = Channel<Channel<Signal.Upstream<R>>>(maxConcurrency)
+        coroutineScope {
+            val producerJob = launch {
+                var outerError: Any = Unset
+                source(
+                    { value ->
+                        val innerChannel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
+                        orderChannel.send(innerChannel)
+                        launch {
+                            semaphore.withPermit {
+                                transform(value).source(
+                                    { inner -> innerChannel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
+                                    { innerChannel.close() },
+                                    { issue -> innerChannel.close(issue) },
+                                )
+                            }
                         }
-                    }
-                    Signal.Downstream.Request
-                },
-                { },
-                { issue -> outerError = issue },
-            )
-            val sentinel = Channel<Signal.Upstream<R>>(0)
-            if (outerError.isError()) sentinel.close(outerError.asError()) else sentinel.close()
-            orderChannel.send(sentinel)
-            orderChannel.close()
-        }
-        var cancelled = false
-        for (innerChannel in orderChannel) {
-            if (cancelled) { innerChannel.cancel(); continue }
-            val result = Either.catching {
-                for (signal in innerChannel) {
-                    when (signal) {
-                        is Signal.Upstream.Next -> if (emit(signal) == Signal.Downstream.Cancel) {
-                            cancelled = true; producerJob.cancel(); break
+                        Signal.Downstream.Request
+                    },
+                    { },
+                    { issue -> outerError = issue },
+                )
+                val sentinel = Channel<Signal.Upstream<R>>(0)
+                if (outerError.isError()) sentinel.close(outerError.asError()) else sentinel.close()
+                orderChannel.send(sentinel)
+                orderChannel.close()
+            }
+            var cancelled = false
+            for (innerChannel in orderChannel) {
+                if (cancelled) { innerChannel.cancel(); continue }
+                val result = Either.catching {
+                    for (signal in innerChannel) {
+                        when (signal) {
+                            is Signal.Upstream.Next -> if (emit(signal) == Signal.Downstream.Cancel) {
+                                cancelled = true; producerJob.cancel(); break
+                            }
+                            else -> break
                         }
-                        else -> break
                     }
                 }
+                if (result is Failure && !cancelled) {
+                    cancelled = true
+                    producerJob.cancel()
+                    emit(Signal.Upstream.Error(result.value))
+                }
             }
-            if (result is Failure && !cancelled) {
-                cancelled = true
-                producerJob.cancel()
-                emit(Signal.Upstream.Error(result.value))
-            }
+            if (!cancelled) emit(Signal.Upstream.Complete)
         }
-        if (!cancelled) emit(Signal.Upstream.Complete)
     }
 }
 
@@ -370,7 +380,6 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
     Many.generate { emit ->
         val channel = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
         coroutineScope {
-            // Control publisher — first signal stops the main source.
             val controlJob = launch {
                 Many.from(other).source(
                     { channel.send(Signal.Upstream.Complete); Signal.Downstream.Cancel },
@@ -494,19 +503,19 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                 events.close()
             }
             val bucket = mutableListOf<T>()
-            var timerJob: Job = Job().also { it.complete() }
+            var timer: TimerState = TimerState.Idle
 
             fun resetTimer() {
-                timerJob.cancel()
-                timerJob = launch { delay(timeout); events.trySend(Either.Right(Unit)) }
+                timer.cancel()
+                timer = TimerState.Running(launch { delay(timeout); events.trySend(Either.Right(Unit)) })
             }
 
             suspend fun flushBucket(): Boolean {
                 if (bucket.isEmpty()) return true
                 val downstream = emit(Signal.Upstream.Next(bucket.toList()))
                 bucket.clear()
-                timerJob.cancel()
-                timerJob = Job().also { it.complete() }
+                timer.cancel()
+                timer = TimerState.Idle
                 return downstream != Signal.Downstream.Cancel
             }
 
@@ -525,12 +534,12 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                             }
                         }
                         is Signal.Upstream.Complete -> {
-                            timerJob.cancel()
+                            timer.cancel()
                             flushBucket()
                             break
                         }
                         is Signal.Upstream.Error -> {
-                            timerJob.cancel()
+                            timer.cancel()
                             emit(Signal.Upstream.Error(signal.cause))
                             terminated = true
                             break
@@ -538,7 +547,7 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                     }
                 }
             }
-            timerJob.cancel()
+            timer.cancel()
             if (!terminated) emit(Signal.Upstream.Complete)
         }
     }
@@ -625,8 +634,8 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
             val producerJob = launch {
                 source(
                     { value ->
-                        // Non-blocking offer: drop if the channel buffer is full.
-                        channel.trySend(Signal.Upstream.Next(value))
+                        if (!channel.trySend(Signal.Upstream.Next(value)).isSuccess)
+                            log.operator.dropping("onBackpressureDrop", value)
                         Signal.Downstream.Request
                     },
                     {
@@ -666,12 +675,12 @@ fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
 
 fun <T : Any> Many<T>.concatWith(other: Many<T>): Many<T> = concat(this, other)
 
-fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<*>): None<T> =
-    concatMap { value -> transform(value).then { Many.items(value) } }.discard()
+fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
+    concatMap { transform(it).toMany() }.discard()
 
 @LowPriorityInOverloadResolution
-fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
-    concatMap(transform = suspend { value: T -> transform(value).then { Many.items(value) } }).discard()
+fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<T>): None<T> =
+    concatMap(transform = suspend { value: T -> transform(value).toMany() }).discard()
 
 /**
  * Maps each item to a [One] and flattens, subscribing concurrently up to the default concurrency.

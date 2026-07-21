@@ -38,6 +38,10 @@ import java.util.concurrent.atomic.AtomicReference
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 
+typealias OnNext<T>  = suspend (T)         -> Signal.Downstream
+typealias OnComplete = suspend ()          -> Unit
+typealias OnError    = suspend (Exception) -> Unit
+
 internal sealed interface Fusion<out T : Any> {
     data object None : Fusion<Nothing>
     abstract class Available<T : Any> : Fusion<T> {
@@ -61,9 +65,9 @@ class Many<T : Any> private constructor(
 
     override fun wrap(
         block: suspend (
-            onNext:     suspend (T) -> Signal.Downstream,
-            onComplete: suspend () -> Unit,
-            onError:    suspend (Exception) -> Unit,
+            onNext:     OnNext<T>,
+            onComplete: OnComplete,
+            onError:    OnError,
         ) -> Unit,
     ): Many<T> = Many.fused(block = block)
 
@@ -84,16 +88,17 @@ class Many<T : Any> private constructor(
     }
 
     override internal suspend fun collect(
-        action: suspend (T) -> Signal.Downstream,
+        action: OnNext<T>,
     ): Either<Exception, Unit> {
         val currentFusion = fusion
         if (currentFusion is Fusion.Available) {
             val poll = currentFusion.create(currentCoroutineContext())
             if (poll != null) return Either.catching {
-                while (true) {
-                    val value = poll.poll() ?: break
-                    if (action(value) == Signal.Downstream.Cancel) break
+                tailrec suspend fun drain() {
+                    val value = poll.poll() ?: return
+                    if (action(value) != Signal.Downstream.Cancel) drain()
                 }
+                drain()
             }
         }
         return when (val result = interpret(step, Frame.Collect(action))) {
@@ -107,12 +112,11 @@ class Many<T : Any> private constructor(
         if (currentFusion !is Fusion.Available) return null
         val poll = currentFusion.create(EmptyCoroutineContext) ?: return null
         return Either.catchingStrict {
-            var accumulator = initial
-            while (true) {
-                val value = poll.poll() ?: break
-                accumulator = accumulate(accumulator, value)
+            tailrec fun drainInto(acc: R): R {
+                val value = poll.poll() ?: return acc
+                return drainInto(accumulate(acc, value))
             }
-            accumulator
+            drainInto(initial)
         }
     }
 
@@ -150,22 +154,20 @@ class Many<T : Any> private constructor(
 
         fun <T : Any> pipelineFrom(): Many<T> = Many(Step.PipelineSource(), SourceFusion())
 
-        fun interval(period: Duration): Many<Long> = fused { onNext, onComplete, _ ->
-            var tick = 0L
-            while (true) {
+        fun interval(period: Duration): Many<Long> = fused { onNext, _, _ ->
+            tailrec suspend fun tick(n: Long) {
                 delay(period)
-                if (onNext(tick++) == Signal.Downstream.Cancel) return@fused
+                if (onNext(n) != Signal.Downstream.Cancel) tick(n + 1)
             }
-            @Suppress("UNREACHABLE_CODE")
-            onComplete()
+            tick(0L)
         }
 
         internal fun <T : Any> fused(
             fusion: Fusion<T> = Fusion.None,
             block: suspend (
-                onNext: suspend (T) -> Signal.Downstream,
-                onComplete: suspend () -> Unit,
-                onError: suspend (Exception) -> Unit,
+                onNext:     OnNext<T>,
+                onComplete: OnComplete,
+                onError:    OnError,
             ) -> Unit,
         ): Many<T> = Many(Step.Suspend(block), fusion)
 
@@ -190,9 +192,9 @@ class Many<T : Any> private constructor(
             concurrency: Int,
             transform: (A) -> Many<B>,
         ): suspend (
-            onNext: suspend (B) -> Signal.Downstream,
-            onComplete: suspend () -> Unit,
-            onError: suspend (Exception) -> Unit,
+            onNext:     OnNext<B>,
+            onComplete: OnComplete,
+            onError:    OnError,
         ) -> Unit {
             val upstream = Many(upstreamStep)
             return { onNext, onComplete, onError ->
@@ -250,9 +252,9 @@ class One<T : Any> private constructor(
 
     override fun wrap(
         block: suspend (
-            onNext:     suspend (T) -> Signal.Downstream,
-            onComplete: suspend () -> Unit,
-            onError:    suspend (Exception) -> Unit,
+            onNext:     OnNext<T>,
+            onComplete: OnComplete,
+            onError:    OnError,
         ) -> Unit,
     ): One<T> = One(Step.Suspend(block))
 
@@ -305,9 +307,9 @@ class One<T : Any> private constructor(
 
         internal operator fun <T : Any> invoke(
             block: suspend (
-                onNext:     suspend (T) -> Signal.Downstream,
-                onComplete: suspend () -> Unit,
-                onError:    suspend (Exception) -> Unit,
+                onNext:     OnNext<T>,
+                onComplete: OnComplete,
+                onError:    OnError,
             ) -> Unit,
         ): One<T> = One(Step.Suspend(block))
 
@@ -371,9 +373,9 @@ class Maybe<T : Any> internal constructor(
 
     override fun wrap(
         block: suspend (
-            onNext:     suspend (T) -> Signal.Downstream,
-            onComplete: suspend () -> Unit,
-            onError:    suspend (Exception) -> Unit,
+            onNext:     OnNext<T>,
+            onComplete: OnComplete,
+            onError:    OnError,
         ) -> Unit,
     ): Maybe<T> = Maybe(Step.Suspend(block))
 
@@ -440,9 +442,9 @@ class Maybe<T : Any> internal constructor(
 
         internal operator fun <T : Any> invoke(
             block: suspend (
-                onNext:     suspend (T) -> Signal.Downstream,
-                onComplete: suspend () -> Unit,
-                onError:    suspend (Exception) -> Unit,
+                onNext:     OnNext<T>,
+                onComplete: OnComplete,
+                onError:    OnError,
             ) -> Unit,
         ): Maybe<T> = Maybe(Step.Suspend(block))
 
@@ -463,9 +465,9 @@ class None<T : Any> private constructor(
 
     override fun wrap(
         block: suspend (
-            onNext:     suspend (T) -> Signal.Downstream,
-            onComplete: suspend () -> Unit,
-            onError:    suspend (Exception) -> Unit,
+            onNext:     OnNext<T>,
+            onComplete: OnComplete,
+            onError:    OnError,
         ) -> Unit,
     ): None<T> = None(Step.Suspend(block))
 
@@ -551,10 +553,11 @@ internal class FilterFusion<T : Any>(
     override fun create(context: CoroutineContext): Fusion.Available<T>? =
         upstream.create(context)?.let { FilterFusion(it, predicate) }
     override fun poll(): T? {
-        while (true) {
+        tailrec fun next(): T? {
             val value = upstream.poll() ?: return null
-            if (predicate(value)) return value
+            return if (predicate(value)) value else next()
         }
+        return next()
     }
     override fun connectSource(upstream: Fusion.Available<*>): Fusion<T> {
         val connected = this.upstream.connectSource(upstream)

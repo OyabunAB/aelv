@@ -24,7 +24,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CancellationException
 import kotlin.time.Duration
 
-private val log = Logging.of<One<*>>()
+private typealias Cached<T> = Either<Unset, T>
 
 fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> {
     val currentFusion = fusion
@@ -146,9 +146,9 @@ suspend fun <T : Any> One<T>.await(timeout: Duration): Either<Exception, T> =
  */
 fun <T : Any> One<T>.cache(): One<T> {
     val mutex  = Mutex()
-    var cached: Either<Unset, Either<Exception, T>> = Unset.left()
+    var cached: Cached<Outcome<T>> = Unset.left()
     return One.generate { emit ->
-        val result: Either<Exception, T> = mutex.withLock {
+        val result: Outcome<T> = mutex.withLock {
             when (val cachedResult = cached) {
                 is Failure  -> await().also { cached = it.right() }
                 is Success -> cachedResult.value

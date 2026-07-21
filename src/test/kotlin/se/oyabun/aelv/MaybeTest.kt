@@ -138,14 +138,14 @@ class MaybeTest {
 
         @Test fun `flatMapNone runs side effect when present`() {
             var ran = false
-            Verify.that(Maybe.present(1).flatMapNone { _: Int -> None.defer<Any> { ran = true } })
+            Verify.that(Maybe.present(1).flatMapNone { _: Int -> None.defer<Int> { ran = true } })
                 .completes()
             assertEquals(true, ran)
         }
 
         @Test fun `flatMapNone does not run when empty`() {
             var ran = false
-            Verify.that(Maybe.empty<Int>().flatMapNone { _: Int -> None.defer<Any> { ran = true } })
+            Verify.that(Maybe.empty<Int>().flatMapNone { _: Int -> None.defer<Int> { ran = true } })
                 .completes()
             assertEquals(false, ran)
         }

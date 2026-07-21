@@ -23,27 +23,26 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-class Verify<T : Any, S : Observable<T, S>> private constructor(
-    private val source:     S,
+class Verify<T : Any> private constructor(
     private val pipeline:   Observable<T, *>,
     private val context:    CoroutineContext = EmptyCoroutineContext,
     private val assertions: List<(List<T>) -> Unit> = emptyList(),
 ) {
 
-    fun assertNext(assertion: (T) -> Unit): Verify<T, S> =
-        Verify(source, pipeline, context, assertions + { items ->
+    fun assertNext(assertion: (T) -> Unit): Verify<T> =
+        Verify(pipeline, context, assertions + { items ->
             if (items.isEmpty()) throw UnexpectedValueError("expected at least one item but stream was empty")
             assertion(items.first())
         })
 
-    fun emitsNext(vararg values: T): Verify<T, S> =
-        Verify(source, pipeline, context, assertions + { items ->
+    fun emitsNext(vararg values: T): Verify<T> =
+        Verify(pipeline, context, assertions + { items ->
             val actual = items.take(values.size)
             if (actual != values.toList()) throw UnexpectedValueError("expected ${values.toList()} but got $actual")
         })
 
-    fun emitsCount(count: Long): Verify<T, S> =
-        Verify(source, pipeline, context, assertions + { items ->
+    fun emitsCount(count: Long): Verify<T> =
+        Verify(pipeline, context, assertions + { items ->
             if (items.size.toLong() != count) throw UnexpectedValueError("expected $count items but got ${items.size}")
         })
 
@@ -98,11 +97,11 @@ class Verify<T : Any, S : Observable<T, S>> private constructor(
     fun timesOut(within: Duration = DEFAULT_TIMEOUT) = failsWith<TimeoutException>(within)
 
     companion object {
-        val DEFAULT_TIMEOUT = 5.seconds
+        val DEFAULT_TIMEOUT get() = Aelv.verifyTimeout
 
-        fun <T : Any, S : Observable<T, S>> that(
-            source:  S,
+        fun <T : Any> that(
+            source:  Observable<T, *>,
             context: CoroutineContext = EmptyCoroutineContext,
-        ): Verify<T, S> = Verify(source, source, context)
+        ): Verify<T> = Verify(source, context)
     }
 }

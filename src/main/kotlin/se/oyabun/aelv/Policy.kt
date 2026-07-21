@@ -23,10 +23,7 @@ import kotlin.time.Duration
  * Backoff strategy between retry attempts.
  */
 sealed class Backoff {
-    /** No delay between retry attempts. */
     data object None : Backoff()
-
-    /** A constant [delay] between every retry attempt. */
     data class Fixed(val delay: Duration) : Backoff()
 
     /**
@@ -50,6 +47,10 @@ internal fun Backoff.delayFor(attempt: Long): Duration = when (this) {
         if (jitter) computed * Random.nextDouble() else computed
     }
 }
+
+// Sentinel: default filter that retries on any exception.
+// Identity-compared in Retry.on() to detect the first call, so it restricts rather than ORs.
+private val RETRY_ALL: (Throwable) -> Boolean = { true }
 
 /**
  * Resilience policies. Use [Policy.retry] to build a retry policy.
@@ -80,14 +81,21 @@ sealed class Policy {
     data class Retry internal constructor(
         internal val maxAttempts: Long = Long.MAX_VALUE,
         internal val backoff: Backoff = Backoff.None,
-        internal val filter: (Throwable) -> Boolean = { true },
+        internal val filter: (Throwable) -> Boolean = RETRY_ALL,
     ) : Policy() {
 
-        /** Only retry when the thrown exception is an instance of [type]. */
-        fun on(type: KClass<out Throwable>): Retry = copy(filter = { type.isInstance(it) })
+        /** Retry when the thrown exception is an instance of [type]. Multiple calls are additive (OR). */
+        fun on(type: KClass<out Throwable>): Retry = on { type.isInstance(it) }
 
-        /** Only retry when [predicate] returns true for the thrown exception. */
-        fun on(predicate: (Throwable) -> Boolean): Retry = copy(filter = predicate)
+        /**
+         * Retry when [predicate] returns true for the thrown exception.
+         * Multiple calls are additive: `.on(A::class).on(B::class)` retries on A or B.
+         * The first call to [on] replaces the default "retry on everything" behaviour.
+         */
+        fun on(predicate: (Throwable) -> Boolean): Retry {
+            val existing = filter
+            return copy(filter = if (existing === RETRY_ALL) predicate else { e -> existing(e) || predicate(e) })
+        }
 
         /** Fixed delay between every attempt. */
         fun withBackoff(delay: Duration): Retry {
@@ -120,7 +128,6 @@ sealed class Policy {
     }
 
     companion object {
-        /** Start building a [Retry] policy. */
         fun retry(): Retry = Retry()
     }
 }

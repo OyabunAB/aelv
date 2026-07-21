@@ -35,9 +35,9 @@ internal sealed class Step<out T : Any> {
     /** Escape hatch for async operators (interval, buffer, …). Not stack-safe for recursive use. */
     class Suspend<T : Any>(
         val block: suspend (
-            onNext:     suspend (T) -> Signal.Downstream,
-            onComplete: suspend () -> Unit,
-            onError:    suspend (Exception) -> Unit,
+            onNext:     OnNext<T>,
+            onComplete: OnComplete,
+            onError:    OnError,
         ) -> Unit,
     ) : Step<T>()
 
@@ -217,9 +217,9 @@ private suspend fun execSuspend(
     todo: ArrayDeque<Work<*>>,
 ) {
     val block: suspend (
-        onNext: suspend (Any) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError: suspend (Exception) -> Unit,
+        onNext: OnNext<Any>,
+        onComplete: OnComplete,
+        onError: OnError,
     ) -> Unit = when (step) {
         is Step.Suspend<*>       -> (step as Step.Suspend<Any>).block
         is Step.FromFlow<*>      -> {

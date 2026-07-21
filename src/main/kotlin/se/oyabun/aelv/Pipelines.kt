@@ -22,7 +22,7 @@ import kotlin.coroutines.CoroutineContext
 /**
  * Coroutine context element that carries the bound source publisher for a pipeline execution.
  *
- * Set once per subscription by [Many.applyTo] / [Many.then] (and their [One]/[None] overloads).
+ * Set once per subscription by [Many.andThen] (and their [One]/[None] overloads).
  * Read by [Many.pipelineFrom] / [One.pipelineFrom] / [None.pipelineFrom] source lambdas to resolve their
  * upstream at runtime (coroutine path). The fusion path resolves the same connection at
  * composition time via [Fusion.connectSource], so this element is never read inside a poll loop.
@@ -46,11 +46,11 @@ internal class SourceSlot(val publisher: Any) : CoroutineContext.Element {
  *
  * Canonical use: chaining named pipeline definitions before binding a source.
  * ```kotlin
- * val full: One<List<ByteArray>> = normalise.then(encode).then(collect)
- * Many.items("a", "b").applyTo(full).await()
+ * val full: One<List<ByteArray>> = normalise.andThen(encode).andThen(collect)
+ * Many.items("a", "b").andThen(full).await()
  * ```
  */
-fun <T : Any, R : Any> Many<T>.then(next: Many<R>): Many<R> {
+fun <T : Any, R : Any> Many<T>.andThen(next: Many<R>): Many<R> {
     val pipelineFusion = next.fusion
     val sourceFusion = this.fusion
     val connectedFusion: Fusion<R> =
@@ -82,10 +82,10 @@ fun <T : Any, R : Any> Many<T>.then(next: Many<R>): Many<R> {
  *
  * Typical use: attaching a collecting terminal (i.e. [toList], [fold]) to a [Many] pipeline.
  * ```kotlin
- * val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 2 }.then(collector)
+ * val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 2 }.andThen(collector)
  * ```
  */
-fun <T : Any, R : Any> Many<T>.then(next: One<R>): One<R> {
+fun <T : Any, R : Any> Many<T>.andThen(next: One<R>): One<R> {
     val left = this
     return One.generate { emit ->
         val outerCtx = currentCoroutineContext()
@@ -102,7 +102,7 @@ fun <T : Any, R : Any> Many<T>.then(next: One<R>): One<R> {
     }
 }
 
-fun <T : Any, R : Any> Many<T>.then(next: None<R>): None<R> {
+fun <T : Any, R : Any> Many<T>.andThen(next: None<R>): None<R> {
     val left = this
     return None.generate {
         val outerCtx = currentCoroutineContext()
@@ -116,18 +116,12 @@ fun <T : Any, R : Any> Many<T>.then(next: None<R>): None<R> {
     }
 }
 
-fun <T : Any, R : Any> Many<T>.applyTo(pipeline: Many<R>): Many<R> = this.then(pipeline)
-
-fun <T : Any, R : Any> Many<T>.applyTo(pipeline: One<R>): One<R> = this.then(pipeline)
-
-fun <T : Any, R : Any> Many<T>.applyTo(pipeline: None<R>): None<R> = this.then(pipeline)
-
 /**
  * Composes this [One] pipeline step with a terminal [One] [next].
  *
  * Feeds this step's single value into [next]'s [One.pipelineFrom] source slot.
  */
-fun <T : Any, R : Any> One<T>.then(next: One<R>): One<R> {
+fun <T : Any, R : Any> One<T>.andThen(next: One<R>): One<R> {
     val left = this
     return One.generate { emit ->
         val outerCtx = currentCoroutineContext()
@@ -149,8 +143,6 @@ fun <T : Any, R : Any> One<T>.then(next: One<R>): One<R> {
         }
     }
 }
-
-fun <T : Any, R : Any> One<T>.applyTo(pipeline: One<R>): One<R> = this.then(pipeline)
 
 /**
  * Marks a pipeline definition as stateful — it captures mutable state that is shared across

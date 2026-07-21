@@ -25,15 +25,13 @@ import kotlin.test.assertTrue
 
 class PipelinesTest {
 
-    // ── Many.pipelineFrom + pipeTo ──────────────────────────────────────────────
-
     class ManyPipedFrom {
 
         @Test
         fun `single pipeline step with pipeTo`() = runTest {
             val pipeline: Many<Int> = Many.pipelineFrom<Int>().map { it * 2 }
 
-            val result = Many.items(1, 2, 3).applyTo(pipeline).toList().await()
+            val result = Many.items(1, 2, 3).andThen(pipeline).toList().await()
             assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(2, 4, 6), result.value)
         }
@@ -44,7 +42,7 @@ class PipelinesTest {
                 .filter { it % 2 == 0 }
                 .toList()
 
-            val result = Many.range(0, 6).applyTo(pipeline).await()
+            val result = Many.range(0, 6).andThen(pipeline).await()
             assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(0, 2, 4), result.value)
         }
@@ -53,7 +51,7 @@ class PipelinesTest {
         fun `pipeline applied to empty source`() = runTest {
             val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 10 }.toList()
 
-            val result = Many.empty<Int>().applyTo(pipeline).await()
+            val result = Many.empty<Int>().andThen(pipeline).await()
             assertIs<Success<List<Int>>>(result)
             assertTrue(result.value.isEmpty())
         }
@@ -67,7 +65,7 @@ class PipelinesTest {
                 .filter { it > 4 }
                 .toList()
 
-            val result = Many.range(0, 5).applyTo(pipeline).await()
+            val result = Many.range(0, 5).andThen(pipeline).await()
             assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(6, 8), result.value)
         }
@@ -76,8 +74,8 @@ class PipelinesTest {
         fun `same pipeline instance reused across multiple sources`() = runTest {
             val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it + 1 }.toList()
 
-            val r1 = Many.items(1, 2, 3).applyTo(pipeline).await()
-            val r2 = Many.items(10, 20, 30).applyTo(pipeline).await()
+            val r1 = Many.items(1, 2, 3).andThen(pipeline).await()
+            val r2 = Many.items(10, 20, 30).andThen(pipeline).await()
 
             assertIs<Success<List<Int>>>(r1)
             assertIs<Success<List<Int>>>(r2)
@@ -90,7 +88,7 @@ class PipelinesTest {
             val pipeline: One<List<Int>> = Many.pipelineFrom<Int>().map { it * 3 }.toList()
 
             val results = (0 until 10).map { base ->
-                async { Many.range(base * 10, 5).applyTo(pipeline).await() }
+                async { Many.range(base * 10, 5).andThen(pipeline).await() }
             }.awaitAll()
 
             results.forEachIndexed { i, result ->
@@ -101,8 +99,6 @@ class PipelinesTest {
         }
     }
 
-    // ── Many.then composition ────────────────────────────────────────────────
-
     class ManyThen {
 
         @Test
@@ -111,9 +107,9 @@ class PipelinesTest {
             val upper: Many<String>    = Many.pipelineFrom<String>().map { it.uppercase() }
             val collect: One<List<String>> = Many.pipelineFrom<String>().toList()
 
-            val full = trim.then(upper).then(collect)
+            val full = trim.andThen(upper).andThen(collect)
 
-            val result = Many.items(" hello ", " world ").applyTo(full).await()
+            val result = Many.items(" hello ", " world ").andThen(full).await()
             assertIs<Success<List<String>>>(result)
             assertEquals(listOf("HELLO", "WORLD"), result.value)
         }
@@ -124,9 +120,9 @@ class PipelinesTest {
             val doubled: Many<Int>       = Many.pipelineFrom<Int>().map { it * 2 }
             val collect: One<List<Int>>  = Many.pipelineFrom<Int>().toList()
 
-            val full = evens.then(doubled).then(collect)
+            val full = evens.andThen(doubled).andThen(collect)
 
-            val result = Many.range(0, 6).applyTo(full).await()
+            val result = Many.range(0, 6).andThen(full).await()
             assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(0, 4, 8), result.value)
         }
@@ -135,10 +131,10 @@ class PipelinesTest {
         fun `then pipeline reused with different sources`() = runTest {
             val step: Many<Int>         = Many.pipelineFrom<Int>().map { it - 1 }
             val sink: One<List<Int>>    = Many.pipelineFrom<Int>().toList()
-            val pipeline = step.then(sink)
+            val pipeline = step.andThen(sink)
 
-            val r1 = Many.items(1, 2, 3).applyTo(pipeline).await()
-            val r2 = Many.items(10, 20, 30).applyTo(pipeline).await()
+            val r1 = Many.items(1, 2, 3).andThen(pipeline).await()
+            val r2 = Many.items(10, 20, 30).andThen(pipeline).await()
 
             assertIs<Success<List<Int>>>(r1)
             assertIs<Success<List<Int>>>(r2)
@@ -153,10 +149,10 @@ class PipelinesTest {
             val c: Many<Int>        = Many.pipelineFrom<Int>().filter { it > 5 }
             val sink: One<List<Int>> = Many.pipelineFrom<Int>().toList()
 
-            val full = a.then(b).then(c).then(sink)
+            val full = a.andThen(b).andThen(c).andThen(sink)
 
             // (0..4) → +1 → *2 → filter>5 → [6, 8]  (mapped: 1,2,3,4,5 → 2,4,6,8,10 → 6,8,10)
-            val result = Many.range(0, 5).applyTo(full).await()
+            val result = Many.range(0, 5).andThen(full).await()
             assertIs<Success<List<Int>>>(result)
             assertEquals(listOf(6, 8, 10), result.value)
         }
@@ -165,10 +161,10 @@ class PipelinesTest {
         fun `then composed concurrently is safe`() = runTest {
             val step: Many<Int>     = Many.pipelineFrom<Int>().map { it * 2 }
             val sink: One<List<Int>> = Many.pipelineFrom<Int>().toList()
-            val pipeline = step.then(sink)
+            val pipeline = step.andThen(sink)
 
             val results = (0 until 8).map { base ->
-                async { Many.range(base * 5, 5).applyTo(pipeline).await() }
+                async { Many.range(base * 5, 5).andThen(pipeline).await() }
             }.awaitAll()
 
             results.forEachIndexed { i, result ->
@@ -179,15 +175,13 @@ class PipelinesTest {
         }
     }
 
-    // ── One.pipelineFrom + pipeTo ───────────────────────────────────────────────
-
     class OnePipedFrom {
 
         @Test
         fun `One pipeline step with pipeTo`() = runTest {
             val pipeline: One<String> = One.pipelineFrom<Int>().map { it.toString() }
 
-            val result = One.single(42).applyTo(pipeline).await()
+            val result = One.single(42).andThen(pipeline).await()
             assertIs<Success<String>>(result)
             assertEquals("42", result.value)
         }
@@ -197,26 +191,22 @@ class PipelinesTest {
             val stringify: One<String> = One.pipelineFrom<Int>().map { it.toString() }
             val prefix: One<String>    = One.pipelineFrom<String>().map { "value=$it" }
 
-            val full = stringify.then(prefix)
+            val full = stringify.andThen(prefix)
 
-            val result = One.single(7).applyTo(full).await()
+            val result = One.single(7).andThen(full).await()
             assertIs<Success<String>>(result)
             assertEquals("value=7", result.value)
         }
     }
-    // ── None.pipelineFrom + pipeTo ──────────────────────────────────────────────
-
     class NonePipedFrom {
 
         @Test
         fun `None pipelineFrom resolves when driven via Many source`() {
             val source   = Many.items(1, 2, 3)
             val pipeline = Many.pipelineFrom<Int>().discard()
-            Verify.that(source.applyTo(pipeline)).completes()
+            Verify.that(source.andThen(pipeline)).completes()
         }
     }
-
-    // ── connectSource fusion ─────────────────────────────────────────────────
 
     class FusionConnectSource {
 

@@ -36,14 +36,14 @@ private val log = Logging.of<Disposable>()
  * Requests [prefetch] items upfront, then re-requests `prefetch / 2` items each time that
  * threshold is consumed — keeping the pipeline full without unbounded buffering.
  *
- * @param prefetch Initial demand and replenishment batch size.  Must be positive.
+ * @param prefetch Initial demand and replenishment batch size.  Must be positive.  Defaults to [Aelv.prefetch].
  * @param onNext   Called for each item.
  * @param onError  Called on error.  Exceptions thrown by this callback are logged and swallowed.
  * @param onComplete Called on normal completion.
  * @return A [Disposable] that can be used to cancel the subscription.
  */
 fun <T : Any> Many<T>.subscribe(
-    prefetch: Long,
+    prefetch: Long = Aelv.prefetch,
     onNext: (T) -> Unit,
     onError: (Exception) -> Unit,
     onComplete: () -> Unit = {},
@@ -74,7 +74,7 @@ fun <T : Any> Many<T>.subscribe(
         override fun onError(t: Throwable) {
             val error = if (t is Exception) t else RuntimeException(t)
             Either.catchingStrict { onError(error) }
-                .onLeft { issue -> log.stream.error("subscriber.onError", issue) }
+                .onLeft { issue -> log.stream.errorCallbackFailed("subscriber.onError", issue) }
         }
 
         override fun onComplete() = onComplete()
@@ -88,9 +88,10 @@ fun <T : Any> Many<T>.subscribe(
 }
 
 /**
- * Subscribes to this [Many] with unbounded demand — equivalent to `subscribe(Long.MAX_VALUE, ...)`.
+ * Subscribes to this [Many] with unbounded demand — the source is never asked to slow down.
  *
  * Use only when the source is known to be bounded or when backpressure is handled upstream.
+ * For bounded-demand subscriptions use [subscribe] instead.
  *
  * @param onNext     Called for each item.
  * @param onError    Called on error.
@@ -102,7 +103,7 @@ fun <T : Any> Many<T>.drain(
     onError: (Exception) -> Unit,
     onComplete: () -> Unit = {},
 ): Disposable = subscribe(
-    prefetch = Long.MAX_VALUE,
+    prefetch = UNBOUNDED,
     onNext = onNext,
     onError = onError,
     onComplete = onComplete,
@@ -163,7 +164,6 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
         }
     }
 
-/** Collects all items into an immutable [List]. */
 fun <T : Any> Many<T>.toList(): One<List<T>> =
     One.generate { emit ->
         val fused = collectInto(mutableListOf<T>()) { accumulator, item -> accumulator.also { it.add(item) } }

@@ -161,7 +161,7 @@ open class AelvBenchmark {
                 }
         )
         .assertNext { list -> check(list.size == size * 4) }
-        .completesNormally()
+        .completes()
         return size
     }
 }
