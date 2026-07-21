@@ -1183,7 +1183,7 @@ class OperatorsTest {
         }
     }
 
-    inner class TimeoutTest {
+    class TimeoutTest {
 
         @Test
         fun `Many timeout fires when stream does not complete in time`() {

@@ -19,10 +19,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import java.util.concurrent.atomic.AtomicReference
 
 internal object Unset
 
-internal fun Any.notUnset(): Boolean = this !== Unset
+internal fun AtomicReference<Any>.isSet(): Boolean = get() !== Unset
 
 internal fun Any.isError(): Boolean = this is Exception
 internal fun Any.asError(): Exception = this as Exception

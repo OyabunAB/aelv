@@ -42,6 +42,11 @@ private sealed interface TimerState {
     fun cancel() = if (this is Running) job.cancel() else Unit
 }
 
+private sealed interface BufferEvent<out T : Any> {
+    data object TimerFlush                                    : BufferEvent<Nothing>
+    data class  SourceSignal<out T : Any>(val signal: Signal.Upstream<T>) : BufferEvent<T>
+}
+
 fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
     val currentFusion = fusion
     return Many.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
@@ -485,20 +490,20 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
     require(size > 0) { "buffer size must be positive, got $size" }
     require(timeout.isPositive()) { "timeout must be positive, got $timeout" }
     return Many.generate { emit ->
-        // Merged event channel: Left = source signal, Right = timer tick sentinel.
-        val events = Channel<Either<Signal.Upstream<T>, Unit>>(Channel.BUFFERED)
+        // Merged event channel: SourceSignal = upstream item/terminal, TimerFlush = timeout sentinel.
+        val events = Channel<BufferEvent<T>>(Channel.BUFFERED)
         coroutineScope {
             val producerJob = launch {
                 source(
                     { value ->
-                        events.send(Either.Left(Signal.Upstream.Next(value)))
+                        events.send(BufferEvent.SourceSignal(Signal.Upstream.Next(value)))
                         Signal.Downstream.Request
                     },
                     {
-                        events.send(Either.Left(Signal.Upstream.Complete))
+                        events.send(BufferEvent.SourceSignal(Signal.Upstream.Complete))
                     },
                     { issue ->
-                        events.send(Either.Left(Signal.Upstream.Error(issue)))
+                        events.send(BufferEvent.SourceSignal(Signal.Upstream.Error(issue)))
                     },
                 )
                 events.close()
@@ -508,7 +513,7 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
 
             fun resetTimer() {
                 timer.cancel()
-                timer = TimerState.Running(launch { delay(timeout); events.trySend(Either.Right(Unit)) })
+                timer = TimerState.Running(launch { delay(timeout); events.trySend(BufferEvent.TimerFlush) })
             }
 
             suspend fun flushBucket(): Boolean {
@@ -523,10 +528,10 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
             var terminated = false
             for (event in events) {
                 when (event) {
-                    is Success -> {
+                    is BufferEvent.TimerFlush -> {
                         if (!flushBucket()) { producerJob.cancel(); terminated = true; break }
                     }
-                    is Failure -> when (val signal = event.value) {
+                    is BufferEvent.SourceSignal -> when (val signal = event.signal) {
                         is Signal.Upstream.Next -> {
                             if (bucket.isEmpty()) resetTimer()
                             bucket.add(signal.value)

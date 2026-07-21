@@ -104,7 +104,7 @@ sealed class Sink<T : Any>(
     private val subscribers = CopyOnWriteArrayList<SubHandle<T>>()
 
     protected fun doEmit(value: T) {
-        if (terminal.get().notUnset()) return
+        if (terminal.isSet()) return
 
         if (historySize > 0) {
             histLock.withLock {
@@ -156,7 +156,7 @@ sealed class Sink<T : Any>(
 
     /** Returns false if terminated or any slow subscriber's overflow queue is full. */
     fun tryEmit(value: T): Boolean {
-        if (terminal.get().notUnset()) return false
+        if (terminal.isSet()) return false
         if (historySize > 0) histLock.withLock {
             history.addLast(value)
             if (historySize != Int.MAX_VALUE && history.size > historySize) history.removeFirst()
@@ -207,9 +207,7 @@ sealed class Sink<T : Any>(
                         if (generatorEmit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
                         item = handle.slowQueue!!.poll()
                     }
-                    val t = terminal.get()
-                    if (t.notUnset()) { generatorEmit(t as Signal.Upstream<T>); return@generate }
-                    handle.wakeup.receive()
+                    if (terminal.isSet()) { generatorEmit(terminal.get() as Signal.Upstream<T>); return@generate }
                 } else {
                     val endPos = writePos              // snapshot: one volatile read per drain batch
                     var drained = false
@@ -219,11 +217,10 @@ sealed class Sink<T : Any>(
                         if (generatorEmit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
                         drained = true
                     }
-                    val t = terminal.get()
-                    if (t.notUnset()) { generatorEmit(t as Signal.Upstream<T>); return@generate }
+                    if (terminal.isSet()) { generatorEmit(terminal.get() as Signal.Upstream<T>); return@generate }
                     if (!drained) {
                         handle.waiting = true
-                        if (handle.cursor >= writePos && terminal.get().notUnset().not()) {
+                        if (handle.cursor >= writePos) {
                             handle.wakeup.receive()
                         }
                         handle.waiting = false
