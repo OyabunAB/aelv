@@ -343,7 +343,7 @@ class OperatorsTest {
         @Test
         fun `retry filter skips non-matching errors`() {
             val cause = InvalidDemandException(-1)
-            Verify.that(Many.error<Int>(cause).retry(Policy.retry().on(NoSuchElementException::class).maxAttempts(5)))
+            Verify.that(Many.error<Int>(cause).retry(Policy.retry().on(NoElementException::class).maxAttempts(5)))
 
                 .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
@@ -385,9 +385,9 @@ class OperatorsTest {
         }
 
         @Test
-        fun `first on empty returns NoSuchElementException`() {
+        fun `first on empty returns NoElementException`() {
             Verify.that(Many.empty<Int>().first())
-                .failsWith<NoSuchElementException>()
+                .failsWith<NoElementException>()
         }
 
         @Test
@@ -482,10 +482,10 @@ class OperatorsTest {
         }
 
         @Test
-        fun `await with timeout returns TimeoutException when source does not emit`() = runTest {
+        fun `await with timeout returns ExceededTimeoutException when source does not emit`() = runTest {
             val result = One.never<Int>().await(10.milliseconds)
             assertIs<Failure<Exception>>(result)
-            assertIs<TimeoutException>(result.value)
+            assertIs<ExceededTimeoutException>(result.value)
         }
     }
 
@@ -890,7 +890,7 @@ class OperatorsTest {
 
         @Test
         fun `zip completes empty when first source is empty`() = runTest {
-            val empty  = One.defer<Int> { throw NoSuchElementException() }.recover { One.single(0) }
+            val empty  = One.defer<Int> { throw NoElementException() }.recover { One.single(0) }
                 .flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } }
             val other  = One.single("a")
             val result = zip(empty, other) { n, s -> "$n$s" }.await()
@@ -989,9 +989,9 @@ class OperatorsTest {
         }
 
         @Test
-        fun `reduce on empty returns NoSuchElementException`() {
+        fun `reduce on empty returns NoElementException`() {
             Verify.that(Many.empty<Int>().reduce { a, b -> a + b })
-                .failsWith<NoSuchElementException>()
+                .failsWith<NoElementException>()
         }
 
         @Test
@@ -1188,7 +1188,7 @@ class OperatorsTest {
         @Test
         fun `Many timeout fires when stream does not complete in time`() {
             Verify.that(Many.never<Int>().timeout(50.milliseconds))
-                .failsWith<TimeoutException>()
+                .failsWith<ExceededTimeoutException>()
         }
 
         @Test
@@ -1201,7 +1201,7 @@ class OperatorsTest {
         @Test
         fun `One timeout fires when value does not arrive in time`() {
             Verify.that(One.never<Int>().timeout(50.milliseconds))
-                .failsWith<TimeoutException>()
+                .failsWith<ExceededTimeoutException>()
         }
 
         @Test
@@ -1214,7 +1214,7 @@ class OperatorsTest {
         @Test
         fun `Maybe timeout fires when neither value nor empty arrives in time`() {
             Verify.that(Maybe.never<Int>().timeout(50.milliseconds))
-                .failsWith<TimeoutException>()
+                .failsWith<ExceededTimeoutException>()
         }
 
         @Test

@@ -205,8 +205,8 @@ class MaybeTest {
                 .completes()
         }
 
-        @Test fun `toOne on empty throws NoSuchElementException`() {
-            Verify.that(Maybe.empty<Int>().toOne()).failsWith<NoSuchElementException>()
+        @Test fun `toOne on empty throws NoElementException`() {
+            Verify.that(Maybe.empty<Int>().toOne()).failsWith<NoElementException>()
         }
     }
 

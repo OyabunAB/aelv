@@ -47,7 +47,7 @@ from the original run (3 warmup × 10 s, 5 measurement × 10 s) on the same mach
 | fold_sum | **154** | **154** | 97 | 48 | 42 |
 | chain (map→filter→take) | 220 | **277** | 134 | 98 | 36 |
 | concatMap_toList | 59 | 69 | **77** | 58 | 32 |
-| flatMap_sequential | **57** | **136** | 92 | 83 | 37 |
+| flatMap_sequential | 64 | **136** | 92 | 83 | 37 |
 | flatMap_concurrent | 23 | **99** | 40 | 55 | 28 |
 
 *ops/ms — higher is better. flatMap_sequential: RxJava=concatMapEager, Reactor=flatMapSequential, Mutiny/Monix=concatMap (no concurrent-ordered variant).*
@@ -64,10 +64,11 @@ no signal allocations. aelv leads on `baseline`, `take`, and `fold`; RxJava lead
 the per-inner-stream coroutine allocation. Mutiny leads at 77 ops/ms on this run; RxJava and
 aelv follow closely.
 
-**`flatMapSequential`** benchmarks concurrent-eager-ordered flat-map. Reactor uses
+**`flatMapSequential`** benchmarks ordered concurrent flat-map. Reactor uses
 `flatMapSequential`, RxJava uses `concatMapEager`. Mutiny and Monix have no concurrent-ordered
-variant — their benchmarks use `concatMap` (sequential); since the inner streams here are
-synchronous, the distinction does not affect throughput. RxJava leads at 136 ops/ms.
+variant — their benchmarks use `concatMap`. `UNDISPATCHED` coroutine starts allow synchronous
+inners to run inline without dispatcher round-trips; async inners still suspend and dispatch
+normally. RxJava's lock-free eager-prefetch buffer still leads for synchronous inners.
 
 **`flatMap_concurrent`** launches inner streams inline (no `launch`, serialised via `Mutex`).
 RxJava's advantage here is its lock-free drain loop. For real IO-bound workloads where inner

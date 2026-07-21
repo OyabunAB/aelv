@@ -82,7 +82,7 @@ sealed class Either<out A, out B> {
 
         suspend fun <T> catching(timeout: kotlin.time.Duration, block: suspend () -> T): Either<Exception, T> =
             try { kotlinx.coroutines.withTimeout(timeout) { block() }.right() }
-            catch (issue: kotlinx.coroutines.TimeoutCancellationException) { TimeoutException(timeout).left() }
+            catch (issue: kotlinx.coroutines.TimeoutCancellationException) { ExceededTimeoutException(timeout).left() }
             catch (issue: Exception) { if (issue is kotlinx.coroutines.CancellationException) throw issue; issue.left() }
 
         /** Constructs a success outcome — alias for [Either.Right]. */
@@ -120,11 +120,11 @@ class InvalidDemandException(n: Long) :
     IllegalArgumentException("request must be positive, got $n (RS spec §3.9)")
 
 /** Thrown by terminal operators such as [Many.first] and [One.await] when the stream is empty. */
-class NoSuchElementException :
+class NoElementException :
     AelvException("stream completed without emitting a value")
 
 /** Signals that a [One.await] call did not receive a value within the specified duration. */
-class TimeoutException(timeout: kotlin.time.Duration) :
+class ExceededTimeoutException(timeout: kotlin.time.Duration) :
     AelvException("await timed out after $timeout")
 
 /** Base class for all assertion failures thrown by [Verify]. */

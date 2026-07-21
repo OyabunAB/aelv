@@ -172,7 +172,7 @@ sink.complete()
 Many.items(1, 2, 3)
     .retry(
         Policy.retry()
-            .on(TimeoutException::class)
+            .on(ExceededTimeoutException::class)
             .withBackoff(100.milliseconds, 10.seconds)
             .maxAttempts(5)
     )
@@ -209,7 +209,7 @@ Verify.that(publisher)
 Verify.that(maybePublisher).emitsCount(0).completes()
 
 // error assertions
-Verify.that(publisher).failsWith<TimeoutException>()
+Verify.that(publisher).failsWith<ExceededTimeoutException>()
 ```
 
 | Method | Applicable to |
@@ -244,7 +244,7 @@ flat-map due to its work-deque interpreter (O(1) JVM stack depth).
 | fold_sum | **154** | **154** | 97 | 48 | 42 |
 | chain (map→filter→take) | 220 | **277** | 134 | 98 | 36 |
 | concatMap_toList | 59 | 69 | **77** | 58 | 32 |
-| flatMap_sequential | 57 | **136** | 92 | 83 | 37 |
+| flatMap_sequential | 64 | **136** | 92 | 83 | 37 |
 | flatMap_concurrent | 23 | **99** | 40 | 55 | 28 |
 
 *ops/ms on 1000 items, JMH throughput mode, OpenJDK 21, Intel i9-8950HK. See [BENCHMARKS.md](BENCHMARKS.md) for methodology.*

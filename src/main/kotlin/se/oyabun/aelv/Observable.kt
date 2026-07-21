@@ -193,7 +193,7 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
     }
 
     /**
-     * Signals [TimeoutException] if no signal arrives from this source within [duration].
+     * Signals [ExceededTimeoutException] if no signal arrives from this source within [duration].
      *
      * The timeout window covers only the time upstream takes to emit each signal — downstream
      * processing is excluded. Resets on each received item, so this is a per-item deadline.

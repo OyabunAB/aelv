@@ -4,7 +4,7 @@
 
 ### Added
 
-- `timeout(Duration)` operator on `Observable`/`Many`/`One`/`Maybe` — fires `TimeoutException` if no item or terminal arrives within the deadline; wakeup channel only activates when subscriber is actually waiting
+- `timeout(Duration)` operator on `Observable`/`Many`/`One`/`Maybe` — fires `ExceededTimeoutException` if no item or terminal arrives within the deadline; wakeup channel only activates when subscriber is actually waiting
 - `Verify.timesOut()` terminal assertion for timeout tests
 - TCK: `ManyVerification`, `OneVerification`, `MaybeVerification`, `NoneVerification` — 152 tests, 0 failures
 
@@ -75,7 +75,7 @@
 - `flatMapMany`, `flatMapMaybe`, `flatMapNone` on `One`
 - `UnicastSink` — single-subscriber hot source; subsequent subscribers receive `IllegalStateException`
 - `Verify.assertNext { }` — assertion lambda over the next item
-- `Verify.timesOut(within)` — asserts the stream fires `TimeoutException` within the deadline
+- `Verify.timesOut(within)` — asserts the stream fires `ExceededTimeoutException` within the deadline
 - `scan(initial, accumulate)` operator on `Many`
 - `Many.defer(suspend () -> Many<T>)` suspend factory variant
 - `Either.getOrThrow()`, `Either.required()` utilities

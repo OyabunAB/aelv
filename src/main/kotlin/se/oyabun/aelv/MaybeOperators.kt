@@ -145,7 +145,7 @@ fun <T : Any> Maybe<T>.orMany(fallback: suspend () -> Many<T>): Many<T> =
     }
 
 /**
- * Converts to a [One], throwing [NoSuchElementException] if this [Maybe] is empty.
+ * Converts to a [One], throwing [NoElementException] if this [Maybe] is empty.
  *
  * Use [or] when the empty case is expected and a fallback is available.
  */
@@ -153,7 +153,7 @@ fun <T : Any> Maybe<T>.toOne(): One<T> =
     One.defer {
         var result: T? = null
         collect { value -> result = value; Signal.Downstream.Cancel }
-        result ?: throw NoSuchElementException()
+        result ?: throw NoElementException()
     }
 
 suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> {

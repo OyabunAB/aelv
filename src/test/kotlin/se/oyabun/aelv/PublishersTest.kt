@@ -179,10 +179,10 @@ class PublishersTest {
         }
 
         @Test
-        fun `await returns NoSuchElementException on empty fused source`() = runTest {
+        fun `await returns NoElementException on empty fused source`() = runTest {
             val result = Many.empty<Int>().first().map { it }.await()
             assertIs<Failure<Exception>>(result)
-            assertIs<NoSuchElementException>(result.value)
+            assertIs<NoElementException>(result.value)
         }
     }
 

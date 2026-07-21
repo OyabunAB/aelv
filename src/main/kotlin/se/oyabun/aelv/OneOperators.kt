@@ -113,7 +113,7 @@ suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
     if (currentFusion is Fusion.Available) {
         val poll = currentFusion.create(kotlin.coroutines.EmptyCoroutineContext)
         if (poll != null) return try {
-            (poll.poll() ?: throw NoSuchElementException()).right()
+            (poll.poll() ?: throw NoElementException()).right()
         } catch (e: CancellationException) { throw e } catch (e: Exception) { e.left() }
     }
     var result: Either<Unset, T> = Unset.left()
@@ -122,7 +122,7 @@ suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
     return when {
         final  is Success -> final.value.right()
         outcome is Failure -> outcome
-        else                   -> NoSuchElementException().left()
+        else                   -> NoElementException().left()
     }
 }
 
@@ -130,7 +130,7 @@ suspend fun <T : Any> One<T>.await(): Either<Exception, T> {
  * Suspends until this [One] emits its value or [timeout] elapses.
  *
  * Returns [Either.Right] with the value on success, or [Either.Left] with a
- * [TimeoutException] if the timeout elapsed before a value was emitted, or with the upstream
+ * [ExceededTimeoutException] if the timeout elapsed before a value was emitted, or with the upstream
  * [Exception] if the source errored.
  */
 suspend fun <T : Any> One<T>.await(timeout: Duration): Either<Exception, T> =

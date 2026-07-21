@@ -24,7 +24,7 @@ fun <T : Any> Flow<T>.asMany(): Many<T> = Many.from(this)
 
 /** Bridges this [Flow] to a [One] by taking its first emitted item. */
 fun <T : Any> Flow<T>.asOne(): One<T> = One.defer {
-    firstOrNull() ?: throw NoSuchElementException()
+    firstOrNull() ?: throw NoElementException()
 }
 
 /** Bridges this [Flow] to a [None] by draining all items. */

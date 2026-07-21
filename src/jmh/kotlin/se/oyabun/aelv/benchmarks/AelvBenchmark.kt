@@ -37,6 +37,7 @@ import se.oyabun.aelv.drain
 import se.oyabun.aelv.filter
 import se.oyabun.aelv.flatMap
 import se.oyabun.aelv.flatMapMany
+import se.oyabun.aelv.flatMapSequential
 import se.oyabun.aelv.fold
 import se.oyabun.aelv.map
 import se.oyabun.aelv.merge
@@ -97,7 +98,7 @@ open class AelvBenchmark {
     fun many_flatMap_sequential_toList(): Int =
         run {
             Many.range(0, size / 10)
-                .flatMap(concurrency = 1) { i -> Many.items(i, i + 1, i + 2) }
+                .flatMapSequential { i -> Many.items(i, i + 1, i + 2) }
                 .toList().await()
         }.rightOrThrow().size
 

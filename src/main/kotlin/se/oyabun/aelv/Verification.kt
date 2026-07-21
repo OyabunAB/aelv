@@ -94,7 +94,7 @@ class Verify<T : Any> private constructor(
             else -> throw UnexpectedTerminalError(type.simpleName, s)
         }
 
-    fun timesOut(within: Duration = DEFAULT_TIMEOUT) = failsWith<TimeoutException>(within)
+    fun timesOut(within: Duration = DEFAULT_TIMEOUT) = failsWith<ExceededTimeoutException>(within)
 
     companion object {
         val DEFAULT_TIMEOUT get() = Aelv.verifyTimeout

@@ -141,7 +141,7 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: suspend (R, T) -> R)
 /**
  * Reduces all items to a single value by applying [accumulate] pairwise.
  *
- * Returns a [One] that emits the reduced value, or signals [NoSuchElementException] if the
+ * Returns a [One] that emits the reduced value, or signals [NoElementException] if the
  * stream was empty, or propagates the upstream error if the stream errored.
  */
 fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
@@ -158,7 +158,7 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
         when (result) {
             is Failure  -> emit(Signal.Upstream.Error(result.value))
             is Success -> when (final) {
-                is Failure  -> emit(Signal.Upstream.Error(NoSuchElementException()))
+                is Failure  -> emit(Signal.Upstream.Error(NoElementException()))
                 is Success -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
             }
         }
@@ -194,7 +194,7 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
 /**
  * Suspends until the first item is emitted then cancels the subscription.
  *
- * Returns [Either.Right] with the first item, or [Either.Left] with [NoSuchElementException]
+ * Returns [Either.Right] with the first item, or [Either.Left] with [NoElementException]
  * if the stream was empty, or with the upstream error if the stream errored.
  */
 fun <T : Any> Many<T>.first(): One<T> {
@@ -207,7 +207,7 @@ fun <T : Any> Many<T>.first(): One<T> {
             when {
                 final   is Success -> { onNext(final.value); onComplete() }
                 outcome is Failure -> onError(outcome.value)
-                else               -> onError(NoSuchElementException())
+                else               -> onError(NoElementException())
             }
         },
         fusion = if (currentFusion is Fusion.Available) TakeFusion(currentFusion, 1) else Fusion.None,
@@ -222,6 +222,6 @@ fun <T : Any> Many<T>.last(): One<T> =
         when {
             final   is Success -> { emit(Signal.Upstream.Next(final.value)); emit(Signal.Upstream.Complete) }
             outcome is Failure -> emit(Signal.Upstream.Error(outcome.value))
-            else               -> emit(Signal.Upstream.Error(NoSuchElementException()))
+            else               -> emit(Signal.Upstream.Error(NoElementException()))
         }
     }
