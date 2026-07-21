@@ -154,12 +154,15 @@ class Many<T : Any> private constructor(
 
         fun <T : Any> pipelineFrom(): Many<T> = Many(Step.PipelineSource(), SourceFusion())
 
-        fun interval(period: Duration): Many<Long> = fused { onNext, _, _ ->
-            tailrec suspend fun tick(n: Long) {
-                delay(period)
-                if (onNext(n) != Signal.Downstream.Cancel) tick(n + 1)
+        fun interval(period: Duration): Many<Long> {
+            require(period.isPositive()) { "interval period must be positive, got $period" }
+            return fused { onNext, _, _ ->
+                tailrec suspend fun tick(n: Long) {
+                    delay(period)
+                    if (onNext(n) != Signal.Downstream.Cancel) tick(n + 1)
+                }
+                tick(0L)
             }
-            tick(0L)
         }
 
         internal fun <T : Any> fused(
@@ -366,7 +369,7 @@ class One<T : Any> private constructor(
  * If no value is available it calls [onComplete] directly without calling [onNext].
  * On error it calls [onError] instead of [onComplete].
  */
-class Maybe<T : Any> internal constructor(
+class Maybe<T : Any> private constructor(
     override val step: Step<T>,
     internal val fusion: Fusion<T> = Fusion.None,
 ) : Publisher<T>, Observable<T, Maybe<T>>() {

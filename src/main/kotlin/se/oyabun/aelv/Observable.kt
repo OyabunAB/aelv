@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@file:OptIn(kotlin.experimental.ExperimentalTypeInference::class)
 package se.oyabun.aelv
 
 import kotlin.coroutines.CoroutineContext
@@ -140,6 +139,13 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
         attempt(0L)
     }
 
+    /**
+     * Invokes [action] each time the source signals an error that will trigger a retry.
+     * Must be placed **before** [retry] in the operator chain — if placed after, [retry]
+     * intercepts the error internally and this operator's [onError] callback is never reached.
+     *
+     * @param action receives the zero-based attempt number and the error that triggered the retry.
+     */
     fun doOnRetry(action: suspend (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
         var attempt = 0L
         source(
@@ -149,6 +155,15 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
         )
     }
 
+    /**
+     * Invokes [action] once when the source successfully emits a value or completes after
+     * at least one error — i.e., when recovery has occurred.  Fires on the first [onNext]
+     * or [onComplete] signal that follows an [onError].
+     *
+     * Must be placed **before** [retry] in the operator chain so it observes the error signals.
+     *
+     * @param action receives the total number of errors that preceded this recovery.
+     */
     fun doOnRecover(action: suspend (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError ->
         var retries  = 0L
         var recovered = false
@@ -236,7 +251,7 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
 
     open fun toMany(): Many<T> = Many.fromStep(step)
 
-    open fun toMaybe(): Maybe<T> = Maybe(step)
+    open fun toMaybe(): Maybe<T> = Maybe.fromStep(step)
 
     fun <R : Any> thenReturn(value: R): One<R> = discard().andThen { One.single(value) }
 

@@ -84,8 +84,9 @@ interface SinkOf<T : Any, Self : SinkOf<T, Self>> {
  *
  * Obtain instances via [Sinks.broadcast], [Sinks.replay], [Sinks.replayLast].
  *
- * **Thread safety**: [emit] serializes concurrent callers via an internal lock.
- * [asMany] and [asOne] may be called concurrently.
+ * **Thread safety**: [emit] is NOT safe for concurrent callers — the ring buffer
+ * is single-writer. Concurrent calls to [emit] will corrupt the buffer. Serialise
+ * external callers if needed. [asMany] and [asOne] may be called concurrently.
  */
 sealed class Sink<T : Any>(
     private val historySize:    Int,

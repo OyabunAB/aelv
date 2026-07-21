@@ -262,7 +262,7 @@ fun <R : Any, T : Any> One.Companion.resource(
     acquire().flatMap { resource ->
         Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
             .firstMaybe()
-            .or { throw IllegalStateException("resource use produced no value") }
+            .or { throw NoElementException() }
     }
 
 fun <R : Any, T : Any> Maybe.Companion.resource(

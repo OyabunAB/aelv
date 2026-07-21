@@ -52,7 +52,6 @@ internal class Log(private val slf4j: Slf4jLogger) {
 
     inner class Subscription {
         fun requested(name: String, n: Long)  { if (enabled()) slf4j.trace { "[$name] request($n)" } }
-        fun cancelled(name: String)           { if (enabled()) slf4j.trace { "[$name] cancel()" } }
         fun backpressure(name: String)        { if (enabled()) slf4j.trace { "[$name] backpressure — awaiting demand" } }
     }
 
