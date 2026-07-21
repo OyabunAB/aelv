@@ -206,8 +206,6 @@ class Many<T : Any> private constructor(
                 val cancelled  = java.util.concurrent.atomic.AtomicBoolean(false)
                 val outerError = AtomicReference<Any>(Unset)
 
-                // Lock-free serialised drain: only the coroutine that transitions wip 0→1
-                // delivers items. Others enqueue and return immediately — no suspension.
                 suspend fun drain() {
                     do {
                         while (true) {
@@ -225,12 +223,30 @@ class Many<T : Any> private constructor(
                     upstream.source(
                         { value ->
                             if (cancelled.get()) return@source Signal.Downstream.Cancel
+                            val inner = transform(value)
+                            val innerFusion = inner.fusion
+                            if (innerFusion is Fusion.Available) {
+                                // Fast path: fused (synchronous) inner — poll directly, no launch or queue.
+                                // Single-threaded execution here satisfies RS §1.3 trivially.
+                                val poll = (innerFusion as Fusion.Available<B>).create(EmptyCoroutineContext)
+                                if (poll != null) {
+                                    tailrec suspend fun pollDrain() {
+                                        if (cancelled.get()) return
+                                        val item = poll.poll() ?: return
+                                        if (onNext(item) == Signal.Downstream.Cancel) cancelled.set(true)
+                                        else pollDrain()
+                                    }
+                                    pollDrain()
+                                    return@source if (cancelled.get()) Signal.Downstream.Cancel else Signal.Downstream.Request
+                                }
+                            }
+                            // Async path: launch inner concurrently, serialise output via drain queue.
                             launch(start = CoroutineStart.UNDISPATCHED) {
                                 semaphore.acquire()
                                 try {
-                                    transform(value).source(
-                                        { inner ->
-                                            queue.add(inner)
+                                    inner.source(
+                                        { item ->
+                                            queue.add(item)
                                             if (wip.getAndIncrement() == 0) drain()
                                             if (cancelled.get()) Signal.Downstream.Cancel
                                             else Signal.Downstream.Request
