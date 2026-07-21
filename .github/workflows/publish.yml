@@ -51,8 +51,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
-      - name: Publish
-        run: ./gradlew publish
+      - name: Publish and stage to Maven Central (release manually at central.sonatype.com)
+        if: ${{ !contains(steps.version.outputs.version, '-') }}
+        run: ./gradlew publishToSonatype closeSonatypeStagingRepository
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GITHUB_ACTOR: ${{ github.actor }}
@@ -62,10 +63,12 @@ jobs:
           OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
 
-      - name: Close Sonatype staging (release manually at central.sonatype.com)
-        if: ${{ !contains(steps.version.outputs.version, '-') }}
-        run: ./gradlew closeSonatypeStagingRepository
+      - name: Publish GitHub Packages only (RC)
+        if: ${{ contains(steps.version.outputs.version, '-') }}
+        run: ./gradlew publishMavenPublicationToGitHubPackagesRepository
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
