@@ -16,6 +16,7 @@
 package se.oyabun.aelv
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -23,12 +24,10 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -201,39 +200,57 @@ class Many<T : Any> private constructor(
         ) -> Unit {
             val upstream = Many(upstreamStep)
             return { onNext, onComplete, onError ->
-                val semaphore = Semaphore(concurrency)
-                val mutex     = Mutex()
-                var cancelled = false
+                val semaphore  = Semaphore(concurrency)
+                val queue      = java.util.concurrent.ConcurrentLinkedQueue<B>()
+                val wip        = java.util.concurrent.atomic.AtomicInteger(0)
+                val cancelled  = java.util.concurrent.atomic.AtomicBoolean(false)
                 val outerError = AtomicReference<Any>(Unset)
+
+                // Lock-free serialised drain: only the coroutine that transitions wip 0→1
+                // delivers items. Others enqueue and return immediately — no suspension.
+                suspend fun drain() {
+                    do {
+                        while (true) {
+                            if (cancelled.get()) { queue.clear(); break }
+                            val item = queue.poll() ?: break
+                            val downstream = onNext(item)
+                            if (downstream == Signal.Downstream.Cancel) {
+                                cancelled.set(true); queue.clear(); break
+                            }
+                        }
+                    } while (wip.decrementAndGet() != 0)
+                }
+
                 coroutineScope {
                     upstream.source(
                         { value ->
-                            if (cancelled) return@source Signal.Downstream.Cancel
-                            semaphore.withPermit {
-                                transform(value).source(
-                                    { inner ->
-                                        mutex.withLock {
-                                            if (cancelled) Signal.Downstream.Cancel
-                                            else {
-                                                val downstream = onNext(inner)
-                                                if (downstream == Signal.Downstream.Cancel) cancelled = true
-                                                downstream
-                                            }
-                                        }
-                                    },
-                                    {},
-                                    { issue -> outerError.compareAndSet(Unset, issue) },
-                                )
+                            if (cancelled.get()) return@source Signal.Downstream.Cancel
+                            launch(start = CoroutineStart.UNDISPATCHED) {
+                                semaphore.acquire()
+                                try {
+                                    transform(value).source(
+                                        { inner ->
+                                            queue.add(inner)
+                                            if (wip.getAndIncrement() == 0) drain()
+                                            if (cancelled.get()) Signal.Downstream.Cancel
+                                            else Signal.Downstream.Request
+                                        },
+                                        { },
+                                        { issue -> outerError.compareAndSet(Unset, issue) },
+                                    )
+                                } finally {
+                                    semaphore.release()
+                                }
                             }
                             Signal.Downstream.Request
                         },
-                        {},
+                        { },
                         { issue -> outerError.compareAndSet(Unset, issue) },
                     )
                 }
                 val error = outerError.get()
                 when {
-                    cancelled       -> {}
+                    cancelled.get() -> {}
                     error.isError() -> onError(error.asError())
                     else            -> onComplete()
                 }

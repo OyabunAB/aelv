@@ -60,12 +60,6 @@ open class MutinyBenchmark {
             .collect().asList().await().indefinitely().size
 
     @Benchmark
-    fun many_flatMapSequential_toList(): Int =
-        Multi.createFrom().range(0, size / 10)
-            .onItem().transformToMultiAndConcatenate { i -> Multi.createFrom().items(i, i + 1, i + 2) }
-            .collect().asList().await().indefinitely().size
-
-    @Benchmark
     fun many_flatMap_toList(): Int =
         Multi.createFrom().range(0, size / 10)
             .onItem().transformToMultiAndMerge { i -> Multi.createFrom().items(i, i + 1, i + 2) }

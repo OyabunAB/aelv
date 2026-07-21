@@ -63,12 +63,6 @@ open class ReactorBenchmark {
             .collectList().block()!!.size
 
     @Benchmark
-    fun flatMapSequential_toList(): Int =
-        Flux.range(0, size / 10)
-            .flatMapSequential { i -> Flux.just(i, i + 1, i + 2) }
-            .collectList().block()!!.size
-
-    @Benchmark
     fun flatMap_toList(): Int =
         Flux.range(0, size / 10)
             .flatMap { i -> Flux.just(i, i + 1, i + 2) }

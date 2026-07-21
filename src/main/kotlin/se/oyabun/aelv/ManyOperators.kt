@@ -26,9 +26,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
@@ -205,40 +203,55 @@ fun <T : Any, R : Any> Many<T>.flatMap(
     concurrency: Int = 256,
     transform: suspend (T) -> Many<R>,
 ): Many<R> = Many.generate { emit ->
-    val semaphore = Semaphore(concurrency)
-    val mutex = Mutex()
-    var cancelled = false
+    val semaphore  = Semaphore(concurrency)
+    val queue      = java.util.concurrent.ConcurrentLinkedQueue<R>()
+    val wip        = java.util.concurrent.atomic.AtomicInteger(0)
+    val cancelled  = java.util.concurrent.atomic.AtomicBoolean(false)
     var outerError: Any = Unset
+
+    suspend fun drain() {
+        do {
+            while (true) {
+                if (cancelled.get()) { queue.clear(); break }
+                val item = queue.poll() ?: break
+                val downstream = emit(Signal.Upstream.Next(item))
+                if (downstream == Signal.Downstream.Cancel) {
+                    cancelled.set(true); queue.clear(); break
+                }
+            }
+        } while (wip.decrementAndGet() != 0)
+    }
+
     coroutineScope {
         source(
             { value ->
-                if (cancelled) return@source Signal.Downstream.Cancel
-                semaphore.withPermit {
-                    transform(value).source(
-                        { inner ->
-                            mutex.withLock {
-                                if (cancelled) Signal.Downstream.Cancel
-                                else {
-                                    val downstream = emit(Signal.Upstream.Next(inner))
-                                    if (downstream == Signal.Downstream.Cancel) cancelled = true
-                                    downstream
-                                }
-                            }
-                        },
-                        {},
-                        { issue -> if (outerError === Unset) outerError = issue },
-                    )
+                if (cancelled.get()) return@source Signal.Downstream.Cancel
+                launch(start = CoroutineStart.UNDISPATCHED) {
+                    semaphore.acquire()
+                    try {
+                        transform(value).source(
+                            { inner ->
+                                queue.add(inner)
+                                if (wip.getAndIncrement() == 0) drain()
+                                if (cancelled.get()) Signal.Downstream.Cancel else Signal.Downstream.Request
+                            },
+                            { },
+                            { issue -> if (outerError === Unset) outerError = issue },
+                        )
+                    } finally {
+                        semaphore.release()
+                    }
                 }
                 Signal.Downstream.Request
             },
-            {},
+            { },
             { issue -> if (outerError === Unset) outerError = issue },
         )
     }
     when {
-        cancelled       -> {}
+        cancelled.get()      -> {}
         outerError.isError() -> emit(Signal.Upstream.Error(outerError.asError()))
-        else            -> emit(Signal.Upstream.Complete)
+        else                 -> emit(Signal.Upstream.Complete)
     }
 }
 

@@ -224,21 +224,20 @@ TCK-verified. `Many` passes all applicable RS Publisher specs. `One` passes all 
 
 aelv implements a synchronous fusion protocol for fused pipelines — when the entire chain from
 source to terminal is synchronous, the coroutine callback machinery is bypassed in favour of a
-tight poll loop. aelv leads on `baseline_toList`, `take_toList`, and `fold_sum`; RxJava leads on
-`map`, `filter`, `chain`, and concurrent `flatMap`. aelv leads all libraries on deep recursive
-flat-map due to its work-deque interpreter (O(1) JVM stack depth).
+tight poll loop. RxJava leads on fused benchmarks; aelv is competitive and ahead of Mutiny and Reactor on all fused operations. aelv leads `BroadcastSink` single-subscriber throughput. `flatMapSequential` allocates one ordering channel per outer item — for synchronous inners the channel overhead dominates; use `concatMap` (55 ops/ms) for sequential ordered work. `flatMapSequential` pays off with genuinely async inners where concurrent pre-fetching amortises the cost. aelv leads all libraries on deep recursive flat-map due to its work-deque interpreter (O(1) JVM stack depth).
 
 | Benchmark | aelv | RxJava | Mutiny | Reactor | Monix |
 |---|---:|---:|---:|---:|---:|
-| baseline_toList | **186** | 165 | 119 | 49 | 30 |
-| map_toList | 100 | **114** | 61 | 46 | 26 |
-| filter_toList | 174 | **208** | 91 | 81 | 32 |
-| take_toList | **230** | 223 | 98 | 96 | 34 |
-| fold_sum | **154** | **154** | 97 | 48 | 42 |
-| chain (map→filter→take) | 220 | **277** | 134 | 98 | 36 |
-| concatMap_toList | 59 | 69 | **77** | 58 | 32 |
-| flatMap_sequential | 64 | **136** | 92 | 83 | 37 |
-| flatMap_concurrent | 23 | **99** | 40 | 55 | 28 |
+| baseline_toList | 144 | **165** | 119 | 49 | 30 |
+| map_toList | 87 | **114** | 61 | 46 | 26 |
+| filter_toList | 146 | **208** | 91 | 81 | 32 |
+| take_toList | 195 | **223** | 98 | 96 | 34 |
+| fold_sum | 140 | **154** | 97 | 48 | 42 |
+| chain (map→filter→take) | 154 | **277** | 134 | 98 | 36 |
+| concatMap_toList | 55 | 69 | **77** | 58 | 32 |
+| flatMap_concurrent | 19 | **99** | 40 | 55 | 28 |
+| sink_broadcast_1 subscriber | **19** | — | — | — | — |
+| sink_broadcast_4 subscribers | 6 | — | — | **9** | — |
 
 *ops/ms on 1000 items, JMH throughput mode, OpenJDK 21, Intel i9-8950HK. See [BENCHMARKS.md](BENCHMARKS.md) for methodology.*
 

@@ -105,16 +105,6 @@ open class MonixBenchmark {
         ).size
 
     @Benchmark
-    fun flatMapSequential_toList(): Int =
-        blockingList(
-            Observable.range(0L, (size / 10).toLong(), 1L)
-                .concatMap { v ->
-                    val i = v as Long
-                    Observable.range(i, i + 3L, 1L)
-                }
-        ).size
-
-    @Benchmark
     fun flatMap_toList(): Int =
         blockingList(
             Observable.range(0L, (size / 10).toLong(), 1L)

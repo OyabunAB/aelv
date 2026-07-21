@@ -30,13 +30,13 @@ import org.openjdk.jmh.annotations.Scope as JmhScope
 import org.openjdk.jmh.annotations.Warmup
 import se.oyabun.aelv.Many
 import se.oyabun.aelv.One
+import se.oyabun.aelv.Signal
 import se.oyabun.aelv.Sinks
 import se.oyabun.aelv.await
 import se.oyabun.aelv.concatMap
 import se.oyabun.aelv.filter
 import se.oyabun.aelv.flatMap
 import se.oyabun.aelv.flatMapMany
-import se.oyabun.aelv.flatMapSequential
 import se.oyabun.aelv.fold
 import se.oyabun.aelv.map
 import se.oyabun.aelv.merge
@@ -89,14 +89,6 @@ open class AelvBenchmark {
         run {
             Many.range(0, size / 10)
                 .concatMap { i -> Many.items(i, i + 1, i + 2) }
-                .toList().await()
-        }.rightOrThrow().size
-
-    @Benchmark
-    fun many_flatMap_sequential_toList(): Int =
-        run {
-            Many.range(0, size / 10)
-                .flatMapSequential { i -> Many.items(i, i + 1, i + 2) }
                 .toList().await()
         }.rightOrThrow().size
 
