@@ -19,6 +19,7 @@ package se.oyabun.aelv
 
 import kotlin.experimental.ExperimentalTypeInference
 import kotlin.internal.LowPriorityInOverloadResolution
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -286,7 +287,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                     { value ->
                         val innerChannel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
                         orderChannel.send(innerChannel)
-                        launch {
+                        launch(start = CoroutineStart.UNDISPATCHED) {
                             semaphore.withPermit {
                                 transform(value).source(
                                     { inner -> innerChannel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
@@ -342,7 +343,7 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
                 source(
                     { value ->
                         activeJob.cancelAndJoin()
-                        activeJob = launch {
+                        activeJob = launch(start = CoroutineStart.UNDISPATCHED) {
                             transform(value).source(
                                 { inner -> channel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { },
@@ -577,7 +578,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                     val groupInbox  = groupChannels.getOrPut(key) {
                         val newGroupInbox = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
                         remaining.incrementAndGet()
-                        launch {
+                        launch(start = CoroutineStart.UNDISPATCHED) {
                             val groupMany = Many.generate<T> { groupEmit ->
                                 for (upstream in newGroupInbox) {
                                     if (groupEmit(upstream) == Signal.Downstream.Cancel) {
