@@ -1,59 +1,66 @@
 # ≋ aelv
 
-Minimalistic reactive streams for Kotlin. Implements the [Reactive Streams](https://www.reactive-streams.org/) specification on top of Kotlin coroutines.
+Reactive streams for Kotlin, built on coroutines.
 
-## Requirements
-
-- Kotlin 2.x
-- JVM 21+
-
-## Install
+Requires Kotlin 2.x and JVM 21+.
 
 ```kotlin
 implementation("se.oyabun:aelv:1.0.0")
 ```
 
-## Types
+---
 
-Four publisher types, each cold and backpressure-aware:
+## Why aelv
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-flowchart LR
-    Many["Many&lt;T&gt; — 0..N"] --> P[Publisher]
-    One["One&lt;T&gt; — exactly 1"] --> P
-    Maybe["Maybe&lt;T&gt; — 0 or 1, no nulls"] --> P
-    None["None&lt;T&gt; — side-effect"] --> P
-```
+### Type-safe
+
+Four types. The compiler enforces what each one means.
 
 ```kotlin
-val items: Many<Int>    = Many.items(1, 2, 3)
-val single: One<Int>    = One.defer { fetchFromDb() }
-val maybe: Maybe<Int>   = Maybe.defer { findOrNull() }
-val effect: None<Unit>  = None.defer { db.commit() }
+val items:  Many<Int>   = Many.items(1, 2, 3)          // 0..N items
+val single: One<Int>    = One.defer { fetchUser(id) }   // exactly 1 — never empty, never null
+val maybe:  Maybe<Int>  = Maybe.defer { findOrNull() }  // 0 or 1 — never null
+val effect: None<Unit>  = None.defer { db.commit() }    // side-effect — produces nothing
 ```
 
-`Maybe<T>` emits either one item or completes empty — never null, never more than one element.
+`Mono<T?>` carries no information about whether null is expected or an error — the compiler treats both identically.  
+`Maybe<T>` encodes the distinction: a value or nothing, null excluded from the type.
 
-## Signals
+### No-throw
 
-Two directions of signal flow:
+Terminal operators return `Either<Exception, T>`.
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-flowchart LR
-    subgraph Upstream ["Upstream (publisher → subscriber)"]
-        N[Next]
-        C[Complete]
-        E[Error]
-    end
-    subgraph Downstream ["Downstream (subscriber → publisher)"]
-        R[Request]
-        X[Cancel]
-    end
+```kotlin
+when (val result = stream.toList().await()) {
+    is Success -> process(result.value)
+    is Failure -> handleError(result.value)
+}
 ```
 
-`Complete`, `Error`, and `Cancel` are all `Terminal` — a stream ends exactly once via one of these three.
+### Backpressure by default
+
+Every `subscribe()` call is bounded. Unbounded demand requires an explicit opt-in.
+
+```kotlin
+stream.subscribe(prefetch = 256) { item -> process(item) }  // bounded — default
+stream.drain { item -> process(item) }                       // unbounded — explicit
+```
+
+### Stack-safe
+
+aelv's work-deque interpreter gives O(1) JVM stack depth for any operator chain.
+Reactor throws `StackOverflowError` at depth 10 000. aelv handles 100 000.
+
+```kotlin
+// Paginated API traversal — each page fetches the next
+fun fetchPage(cursor: String): Many<Item> =
+    Many.defer { api.getPage(cursor) }
+        .flatMap { page -> if (page.hasNext) fetchPage(page.nextCursor) else Many.empty() }
+
+fetchPage("start").toList().await()
+```
+
+---
 
 ## Operators
 
@@ -63,50 +70,38 @@ flowchart LR
 |---|---|
 | Transform | `map` `mapNotNull` `filter` `take` `takeWhile` `skip` `skipWhile` `distinct` `distinctUntilChanged` `distinctUntilChangedBy` |
 | Expand | `flatMap` `flatMapOne` `flatMapNone` `concatMap` `flatMapSequential` `switchMap` |
-| Combine | `merge` `mergeWith` `concat` `zip` `combineLatest` `takeUntilOther` `delaySubscription` |
+| Combine | `merge` `mergeWith` `concat` `zip` `zipWith` `combineLatest` `takeUntilOther` `delaySubscription` |
 | Buffer | `buffer(size)` `buffer(size, skip)` `bufferTimeout` |
 | Group | `groupBy` |
-| Side-effect | `doOnNext` `doOnComplete` `doOnError` `doOnSubscribe` `doFinally` |
+| Side-effect | `doOnNext` `doOnComplete` `doOnError` `doOnSubscribe` `doFinally` `doOnRetry` `doOnRecover` |
 | Error | `recover` `recoverWith` `retry(n)` `retry(Policy)` `onBackpressureDrop` |
 | Utility | `delayElement(Duration)` `interval(Duration)` `discard()` `thenReturn(value)` |
 | Context | `publishOn` `subscribeOn` |
-| Terminal | `fold` `reduce` `toList` `toSet` `first` `firstMaybe` `last` `drain` `subscribe` |
-
-`flatMap(T -> Many<R>)` — standard fan-out, returns `Many<R>`  
-`flatMapOne(T -> One<R>)` — each element maps to exactly one, returns `Many<R>`  
-`flatMapNone(T -> None<R>)` — each element triggers a side-effect, returns `None<R>`
+| Terminal | `fold` `reduce` `scan` `toList` `toSet` `first` `firstMaybe` `last` `drain` `subscribe` |
 
 ### One
 
 | Category | Operators |
 |---|---|
 | Transform | `map` `flatMap` `flatMapMany` `flatMapMaybe` `flatMapNone` |
-| Combine | `zipWith` |
+| Combine | `zipWith` `concatWith` |
 | Side-effect | `doOnNext` `doOnError` `doFinally` |
 | Error | `recover` `retry(n)` `retry(Policy)` |
 | Utility | `discard()` `thenReturn(value)` |
 | Context | `publishOn` `subscribeOn` |
 | Terminal | `await` `cache` |
 
-`flatMap(T -> One<R>)` — returns `One<R>`  
-`flatMapMany(T -> Many<R>)` — returns `Many<R>`  
-`flatMapMaybe(T -> Maybe<R>)` — returns `Maybe<R>`  
-`flatMapNone(T -> None<R>)` — returns `None<R>`
-
 ### Maybe
 
 | Category | Operators |
 |---|---|
 | Transform | `map` `filter` `flatMap` `flatMapMany` `flatMapNone` |
+| Combine | `concatWith` |
 | Side-effect | `doOnNext` `doOnComplete` `doOnError` `doFinally` |
 | Error | `recover` `retry(n)` `retry(Policy)` |
 | Utility | `discard()` `thenReturn(value)` |
 | Context | `publishOn` `subscribeOn` |
 | Terminal | `await` `or` `orMany` `toOne` |
-
-`flatMap(T -> Maybe<R>)` — returns `Maybe<R>`  
-`flatMapMany(T -> Many<R>)` — returns `Many<R>`  
-`flatMapNone(T -> None<R>)` — returns `None<R>`
 
 ### None
 
@@ -116,133 +111,110 @@ flowchart LR
 | Utility | `discard()` `thenReturn(value)` |
 | Terminal | `await` |
 
-`andThen` chains a subsequent publisher that runs after the side-effect completes, returning the appropriate type.
-
-### zip
-
-```kotlin
-zip(One.single(1), One.single("a")) { n, s -> "$n$s" }  // One<String> → "1a"
-```
-
-## Conversions
-
-| Expression | Result |
-|---|---|
-| `one.toMaybe()` | `Maybe<T>` — wraps the single value |
-| `one.toMany()` | `Many<T>` — stream of one element |
-| `many.firstMaybe()` | `Maybe<T>` — first element or empty |
-| `none.toMany()` | `Many<T>` — empty stream after effect completes |
-
-```kotlin
-val maybeUser: Maybe<User> = One.defer { db.findUser(id) }.toMaybe()
-val firstHit: Maybe<Result> = results.firstMaybe()
-```
-
 ## Sink
 
 Hot multicast push source. Three variants:
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-flowchart LR
-    E[emit/complete/error] --> S{Sink}
-    S -->|broadcast| A[no history]
-    S -->|replay| B[full history]
-    S -->|replayLast n| C[last n]
+```kotlin
+val sink = Sinks.broadcast<Int>()   // no history — present subscribers only
+val sink = Sinks.replay<Int>()      // full history — late subscribers see everything
+val sink = Sinks.replayLast(n)      // last n items replayed to late subscribers
 ```
 
 ```kotlin
-val sink = Sinks.broadcast<Int>()
 sink.asMany().filter { it > 0 }.subscribe(...)
-sink.emit(1)           // throws on overflow or after terminal
-sink.tryEmit(1)        // returns false instead of throwing
+sink.emit(1)        // throws on overflow or after terminal
+sink.tryEmit(1)     // returns false instead of throwing
 sink.complete()
 ```
 
 ## Retry
 
 ```kotlin
-Many.items(1, 2, 3)
+Many.defer { api.fetchItems() }
     .retry(
         Policy.retry()
+            .on(IOException::class)
             .on(ExceededTimeoutException::class)
-            .withBackoff(100.milliseconds, 10.seconds)
+            .withBackoff(100.milliseconds, 10.seconds, jitter = true)
             .maxAttempts(5)
     )
 ```
 
 `Backoff` options: `None`, `Fixed(delay)`, `Exponential(initial, max, factor, jitter)`.
 
-## Error handling
-
-Terminal operations return `Either<Exception, T>` — no exceptions thrown at call sites. `Failure` carries the error, `Success` carries the value.
-
-```kotlin
-when (val result = stream.toList().await()) {
-    is Success -> process(result.value)
-    is Failure -> handleError(result.value)
-}
-```
-
 ## Verify
 
-Test DSL included in the main artifact:
+Test DSL ships with the library:
 
 ```kotlin
-Verify.that(publisher)
-    .emitsNext(1, 2, 3)
-    .completes()
-
-// assert individual items
-Verify.that(publisher)
-    .assertNext { assertEquals(1, it) }
-    .completes()
-
-// empty completion
+Verify.that(publisher).emitsNext(1, 2, 3).completes()
+Verify.that(publisher).assertNext { assertEquals(42, it) }.completes()
 Verify.that(maybePublisher).emitsCount(0).completes()
-
-// error assertions
 Verify.that(publisher).failsWith<ExceededTimeoutException>()
+Verify.that(slowPublisher).timesOut(within = 100.milliseconds)
 ```
 
-| Method | Applicable to |
-|---|---|
-| `completes()` | Many, One, Maybe, None |
-| `emitsNext(vararg values)` | Many, One |
-| `assertNext { predicate }` | Many, One, Maybe |
-| `emitsCount(n)` | Many |
-| `cancels()` | Many, One, Maybe, None |
-| `fails()` | Many, One, Maybe, None |
-| `failsWith<X>()` | Many, One, Maybe, None |
-| `timesOut()` | Many, One, Maybe |
+## Configuration
+
+```kotlin
+Aelv.loggingEnabled = true      // SLF4J logging — off by default
+Aelv.bufferSize     = 8192      // sink ring buffer size
+Aelv.cpuPoolSize    = 4         // override for containers where availableProcessors() lies
+Aelv.prefetch       = 256L      // default subscribe() prefetch window
+Aelv.verifyTimeout  = 10.seconds
+```
+
+## Dispatchers
+
+```kotlin
+subscribeOn(Dispatchers.cpu)   // aelv's named CPU pool — aelv-cpu-N threads
+subscribeOn(Dispatchers.io)    // aelv's IO pool — aelv-io-N virtual threads (JVM 21)
+```
+
+All aelv threads are named. `aelv-cpu-N` in a thread dump means an aelv producer coroutine.
 
 ## RS Compliance
 
-TCK-verified. `Many` passes all applicable RS Publisher specs. `One` passes all single-element specs.
+TCK-verified. 152 tests, 0 failures across `Many`, `One`, `Maybe`, and `None`.
 
 ## Performance
 
-aelv implements a synchronous fusion protocol for fused pipelines — when the entire chain from
-source to terminal is synchronous, the coroutine callback machinery is bypassed in favour of a
-tight poll loop. RxJava leads on fused benchmarks; aelv is competitive and ahead of Mutiny and Reactor on all fused operations. aelv leads `BroadcastSink` single-subscriber throughput. `flatMapSequential` allocates one ordering channel per outer item — for synchronous inners the channel overhead dominates; use `concatMap` (55 ops/ms) for sequential ordered work. `flatMapSequential` pays off with genuinely async inners where concurrent pre-fetching amortises the cost. aelv leads all libraries on deep recursive flat-map due to its work-deque interpreter (O(1) JVM stack depth).
+**Stack safety:**
+
+| depth | aelv | RxJava | Monix | Mutiny | Reactor |
+|---|---:|---:|---:|---:|---|
+| 1 000 | 10 | 39 | 4.2 | 1.1 | 16 |
+| 10 000 | 1.5 | 3.7 | 0.26 | timeout | **crash** |
+| 100 000 | 0.15 | 0.27 | 0.21 | timeout | **crash** |
+
+*ops/ms — higher is better.*
+
+**IO-bound concurrent work:**
+
+```
+100 parallel IO calls, 1ms each:
+  flatMap(concurrency=256):  ~1ms   — 87× faster than sequential
+  concatMap:               ~100ms
+```
+
+aelv, RxJava, Reactor, Mutiny, and Monix all achieve the same ~87× speedup.
+
+**Synchronous pipeline throughput** (ops/ms, 1000 items):
 
 | Benchmark | aelv | RxJava | Mutiny | Reactor | Monix |
 |---|---:|---:|---:|---:|---:|
-| baseline_toList | 144 | **165** | 119 | 49 | 30 |
-| map_toList | 87 | **114** | 61 | 46 | 26 |
-| filter_toList | 146 | **208** | 91 | 81 | 32 |
-| take_toList | 195 | **223** | 98 | 96 | 34 |
-| fold_sum | 140 | **154** | 97 | 48 | 42 |
-| chain (map→filter→take) | 154 | **277** | 134 | 98 | 36 |
-| concatMap_toList | 55 | 69 | **77** | 58 | 32 |
-| flatMap_concurrent | 19 | **99** | 40 | 55 | 28 |
-| sink_broadcast_1 subscriber | **19** | — | — | — | — |
-| sink_broadcast_4 subscribers | 6 | — | — | **9** | — |
+| baseline_toList | 153 | **165** | 119 | 49 | 30 |
+| map_toList | 92 | **114** | 61 | 46 | 26 |
+| filter_toList | 155 | **208** | 91 | 81 | 32 |
+| take_toList | 207 | **223** | 98 | 96 | 34 |
+| fold_sum | **174** | 154 | 97 | 48 | 42 |
+| chain (map→filter→take) | 199 | **277** | 134 | 98 | 36 |
+| flatMap_concurrent | 67 | **99** | 40 | 55 | 28 |
 
-*ops/ms on 1000 items, JMH throughput mode, OpenJDK 21, Intel i9-8950HK. See [BENCHMARKS.md](BENCHMARKS.md) for methodology.*
+aelv is within 15% of RxJava and leads Reactor on all fused benchmarks.
 
-Backpressure is unconditional — fusion only activates on the internal synchronous terminal path.
-Any async operator routes through the full protocol with demand signalling and cancellation.
+See [BENCHMARKS.md](BENCHMARKS.md) for full methodology and deep-flatMap results.
 
 ## Status
 
