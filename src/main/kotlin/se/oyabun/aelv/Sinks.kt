@@ -24,9 +24,6 @@ import kotlin.concurrent.withLock
 import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val DEFAULT_BUFFER     = 4096
-private const val DEFAULT_MAX_SLOW   = DEFAULT_BUFFER * 4
-
 /** Slow-path buffer for promoted subscribers. Grows freely up to [max], then rejects. */
 private class BoundedQueue<T : Any>(val max: Int) {
     private val queue = ConcurrentLinkedQueue<T>()
@@ -95,6 +92,8 @@ sealed class Sink<T : Any>(
     private val bufferSize:     Int,
     private val maxSlowBuffer:  Int,
 ) {
+    private val log          = Logging.of<Sink<*>>()
+    private val name         = this::class.simpleName ?: "Sink"
     private val buffer       = arrayOfNulls<Any>(bufferSize)
     @Volatile private var writePos = 0L               // written by emitter, read by subscribers
 
@@ -146,6 +145,11 @@ sealed class Sink<T : Any>(
 
     protected fun doTerminate(signal: Signal.Upstream<T>) {
         if (!terminal.compareAndSet(Unset, signal)) return
+        when (signal) {
+            is Signal.Upstream.Complete -> log.sink.completed(name)
+            is Signal.Upstream.Error    -> log.sink.error(name, signal.cause)
+            is Signal.Upstream.Next     -> Unit
+        }
         for (sub in subscribers) if (sub.waiting) sub.wakeup.trySend(Unit)
     }
 
@@ -170,6 +174,11 @@ sealed class Sink<T : Any>(
     }
 
     private fun register(): Pair<SubHandle<T>, List<T>> {
+        // For replay sinks: writeStart is captured inside histLock so the history snapshot
+        // and the ring-buffer cursor are consistent with each other. A one-item duplicate
+        // can still occur if doEmit releases histLock (after adding to history) but has not
+        // yet incremented writePos when register runs — moving writePos inside the lock would
+        // close this window but serialises every emit with every subscribe.
         val handle = SubHandle<T>(writeStart = writePos)
         val snapshot = if (historySize > 0) histLock.withLock {
             subscribers.add(handle)
@@ -178,6 +187,7 @@ sealed class Sink<T : Any>(
             subscribers.add(handle)
             emptyList()
         }
+        log.sink.subscriberAttached(name)
         return handle to snapshot
     }
 
@@ -221,6 +231,7 @@ sealed class Sink<T : Any>(
             }
         } finally {
             subscribers.remove(handle)
+            log.sink.subscriberDetached(name)
         }
     }
 
@@ -228,7 +239,7 @@ sealed class Sink<T : Any>(
 }
 
 /** Emits only to subscribers present at the time of emission; no history. */
-class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = DEFAULT_MAX_SLOW) :
+class BroadcastSink<T : Any>(bufferSize: Int = Aelv.bufferSize, maxSlowBuffer: Int = Aelv.maxSlowBuffer) :
     Sink<T>(historySize = 0, bufferSize = bufferSize, maxSlowBuffer = maxSlowBuffer),
     SinkOf<T, BroadcastSink<T>> {
 
@@ -239,7 +250,7 @@ class BroadcastSink<T : Any>(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: In
 }
 
 /** Buffers the full emission history; late subscribers receive all past items then live items. */
-class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = DEFAULT_MAX_SLOW) :
+class ReplaySink<T : Any>(bufferSize: Int = Aelv.bufferSize, maxSlowBuffer: Int = Aelv.maxSlowBuffer) :
     Sink<T>(historySize = Int.MAX_VALUE, bufferSize = bufferSize, maxSlowBuffer = maxSlowBuffer),
     SinkOf<T, ReplaySink<T>> {
 
@@ -250,7 +261,7 @@ class ReplaySink<T : Any>(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int =
 }
 
 /** Buffers the last [n] items; late subscribers receive recent history then live items. */
-class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = DEFAULT_MAX_SLOW) :
+class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = Aelv.bufferSize, maxSlowBuffer: Int = Aelv.maxSlowBuffer) :
     Sink<T>(historySize = count, bufferSize = bufferSize, maxSlowBuffer = maxSlowBuffer),
     SinkOf<T, ReplayLastSink<T>> {
 
@@ -263,13 +274,13 @@ class ReplayLastSink<T : Any>(val count: Int, bufferSize: Int = DEFAULT_BUFFER, 
 }
 
 object Sinks {
-    fun <T : Any> broadcast(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = bufferSize * 4): BroadcastSink<T> =
+    fun <T : Any> broadcast(bufferSize: Int = Aelv.bufferSize, maxSlowBuffer: Int = Aelv.maxSlowBuffer): BroadcastSink<T> =
         BroadcastSink(bufferSize, maxSlowBuffer)
 
-    fun <T : Any> replay(bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = bufferSize * 4): ReplaySink<T> =
+    fun <T : Any> replay(bufferSize: Int = Aelv.bufferSize, maxSlowBuffer: Int = Aelv.maxSlowBuffer): ReplaySink<T> =
         ReplaySink(bufferSize, maxSlowBuffer)
 
-    fun <T : Any> replayLast(n: Int, bufferSize: Int = DEFAULT_BUFFER, maxSlowBuffer: Int = bufferSize * 4): ReplayLastSink<T> =
+    fun <T : Any> replayLast(n: Int, bufferSize: Int = Aelv.bufferSize, maxSlowBuffer: Int = Aelv.maxSlowBuffer): ReplayLastSink<T> =
         ReplayLastSink(n, bufferSize, maxSlowBuffer)
 
     fun <T : Any> unicast(): UnicastSink<T> = UnicastSink()

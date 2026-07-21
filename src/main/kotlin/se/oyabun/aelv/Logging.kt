@@ -27,30 +27,40 @@ internal inline fun Slf4jLogger.error(cause: Throwable, msg: () -> String) { if 
 internal inline fun Slf4jLogger.debug(cause: Throwable, msg: () -> String) { if (isDebugEnabled) debug(msg(), cause) }
 internal class Log(private val slf4j: Slf4jLogger) {
 
-    val stream = Stream()
-    val operator = Operator()
+    private fun enabled() = Aelv.loggingEnabled
+
+    val stream       = Stream()
+    val operator     = Operator()
     val subscription = Subscription()
+    val sink         = Sink()
 
     inner class Stream {
-        fun subscribing(name: String) = slf4j.trace { "$name subscribing" }
-        fun completed(name: String) = slf4j.trace { "$name completed" }
-        fun cancelled(name: String) = slf4j.trace { "$name cancelled" }
-        fun error(name: String, cause: Throwable) = slf4j.warn(cause) { "$name terminated with error" }
+        fun subscribing(name: String)                              { if (enabled()) slf4j.trace { "$name subscribing" } }
+        fun completed(name: String)                                { if (enabled()) slf4j.trace { "$name completed" } }
+        fun cancelled(name: String)                                { if (enabled()) slf4j.trace { "$name cancelled" } }
+        fun error(name: String, cause: Throwable)                  { if (enabled()) slf4j.warn(cause) { "$name terminated with error" } }
+        fun errorCallbackFailed(name: String, cause: Throwable)    { if (enabled()) slf4j.error(cause) { "$name onError callback threw" } }
+        fun unexpectedThrowable(name: String, cause: Throwable)    { if (enabled()) slf4j.error(cause) { "$name terminated with non-Exception Throwable — wrapped as RuntimeException" } }
     }
 
     inner class Operator {
-        fun emitting(op: String, value: Any?) = slf4j.trace { "[$op] emitting $value" }
-        fun dropping(op: String, value: Any?) = slf4j.trace { "[$op] dropping $value" }
-        fun error(op: String, cause: Throwable) = slf4j.warn(cause) { "[$op] error" }
-        fun retrying(op: String, attempt: Long, cause: Throwable) = slf4j.debug(cause) { "[$op] retrying (attempt $attempt)" }
-        fun retryExhausted(op: String, cause: Throwable) = slf4j.warn(cause) { "[$op] retries exhausted" }
-        fun sideEffectThrew(op: String, cause: Throwable) = slf4j.warn(cause) { "[$op] side-effect threw — ignoring" }
+        fun dropping(op: String, value: Any?)                      { if (enabled()) slf4j.trace { "[$op] dropping $value" } }
+        fun retrying(op: String, attempt: Long, cause: Throwable)  { if (enabled()) slf4j.debug(cause) { "[$op] retrying (attempt $attempt)" } }
+        fun retryExhausted(op: String, cause: Throwable)           { if (enabled()) slf4j.warn(cause) { "[$op] retries exhausted" } }
+        fun sideEffectThrew(op: String, cause: Throwable)          { if (enabled()) slf4j.warn(cause) { "[$op] side-effect threw — ignoring" } }
     }
 
     inner class Subscription {
-        fun requested(name: String, n: Long) = slf4j.trace { "[$name] request($n)" }
-        fun cancelled(name: String) = slf4j.trace { "[$name] cancel()" }
-        fun backpressure(name: String) = slf4j.debug { "[$name] backpressure — downstream slow" }
+        fun requested(name: String, n: Long)  { if (enabled()) slf4j.trace { "[$name] request($n)" } }
+        fun cancelled(name: String)           { if (enabled()) slf4j.trace { "[$name] cancel()" } }
+        fun backpressure(name: String)        { if (enabled()) slf4j.trace { "[$name] backpressure — awaiting demand" } }
+    }
+
+    inner class Sink {
+        fun completed(name: String)                               { if (enabled()) slf4j.debug { "[$name] sink completed" } }
+        fun error(name: String, cause: Throwable)                 { if (enabled()) slf4j.warn(cause) { "[$name] sink terminated with error" } }
+        fun subscriberAttached(name: String)                      { if (enabled()) slf4j.debug { "[$name] subscriber attached" } }
+        fun subscriberDetached(name: String)                      { if (enabled()) slf4j.debug { "[$name] subscriber detached" } }
     }
 }
 
