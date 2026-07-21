@@ -15,7 +15,6 @@
  */
 package se.oyabun.aelv
 
-import com.sun.jdi.request.InvalidRequestStateException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
@@ -567,7 +566,7 @@ class OperatorsTest {
 
         @Test
         fun `group Complete is delivered before outer stream Complete`() = runTest {
-            // Regression for Bug G1/G3.
+            // Regression: group onComplete was fired after the outer stream completed, not before.
             val completedGroups = mutableSetOf<Int>()
             Verify.that(Many.items(1, 2, 3, 4, 5, 6)
                 .groupBy({ it % 3 }) { key, group ->
@@ -580,7 +579,7 @@ class OperatorsTest {
 
         @Test
         fun `group Error is delivered before outer stream Error`() = runTest {
-            // Regression for Bug G3.
+            // Regression: group onError was fired after the outer stream errored, not before.
             val cause         = InvalidDemandException(-1)
             val erroredGroups = mutableSetOf<Int>()
             Verify.that(Many.generate<Int> { emit ->
@@ -615,17 +614,34 @@ class OperatorsTest {
     class SwitchMap {
 
         @Test
-        fun `switchMap emits from latest inner stream only`() {
-            val source = Many.items(1, 2, 3)
-            val result = source.switchMap { Many.items(it * 10) }.toList().map { it.last() }
-            Verify.that(result).emitsNext(30).completes()
+        fun `switchMap cancels in-flight inner when new outer item arrives`() {
+            val outerSink = Sinks.unicast<Int>()
+            // Driver emits outer item 1, waits for inner1 to start blocking, then emits outer item 2.
+            // If switchMap correctly cancels inner1 (Many.never), the stream emits [20] and completes.
+            // If switchMap fails to cancel inner1, the stream never completes and the test times out.
+            val driver: Many<Int> = None.defer<Int> {
+                outerSink.emit(1)
+                delay(50.milliseconds)
+                outerSink.emit(2)
+                outerSink.complete()
+            }.toMany()
+            Verify.that(
+                merge(
+                    outerSink.asMany().switchMap { outer ->
+                        if (outer == 1) Many.never() else Many.items(outer * 10)
+                    },
+                    driver,
+                ),
+                Dispatchers.Default,
+            )
+                .emitsNext(20)
+                .completes(within = 5.seconds)
         }
 
         @Test
         fun `switchMap propagates source error`() {
             val cause = InvalidDemandException(-1)
             Verify.that(Many.error<Int>(cause).switchMap { Many.items(it) })
-
                 .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
@@ -739,7 +755,7 @@ class OperatorsTest {
 
         @Test
         fun `None delaySubscription completes after delay`() {
-            Verify.that(None.complete<Unit>().delaySubscription(10.milliseconds))
+            Verify.that(None.complete<Int>().delaySubscription(10.milliseconds))
                 .completes()
         }
     }
@@ -918,7 +934,7 @@ class OperatorsTest {
         @Test
         fun `flatMapNone propagates error from One`() {
             val cause = InvalidDemandException(-1)
-            Verify.that(One.error<Int>(cause).flatMapNone { None.complete<Unit>() })
+            Verify.that(One.error<Int>(cause).flatMapNone { None.complete<Int>() })
 
                 .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }

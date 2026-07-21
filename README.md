@@ -75,6 +75,7 @@ flowchart LR
 | Group | `groupBy` |
 | Side-effect | `doOnNext` `doOnComplete` `doOnError` `doOnSubscribe` `doFinally` |
 | Error | `recover` `recoverWith` `retry(n)` `retry(Policy)` `onBackpressureDrop` |
+| Utility | `delayElement(Duration)` `interval(Duration)` `discard()` `thenReturn(value)` |
 | Context | `publishOn` `subscribeOn` |
 | Terminal | `fold` `reduce` `toList` `toSet` `first` `firstMaybe` `last` `drain` `subscribe` |
 
@@ -90,6 +91,7 @@ flowchart LR
 | Combine | `zipWith` |
 | Side-effect | `doOnNext` `doOnError` `doFinally` |
 | Error | `recover` `retry(n)` `retry(Policy)` |
+| Utility | `discard()` `thenReturn(value)` |
 | Context | `publishOn` `subscribeOn` |
 | Terminal | `await` `cache` |
 
@@ -105,8 +107,9 @@ flowchart LR
 | Transform | `map` `filter` `flatMap` `flatMapMany` `flatMapNone` |
 | Side-effect | `doOnNext` `doOnComplete` `doOnError` `doFinally` |
 | Error | `recover` `retry(n)` `retry(Policy)` |
+| Utility | `discard()` `thenReturn(value)` |
 | Context | `publishOn` `subscribeOn` |
-| Terminal | `await` `or` `toOne` |
+| Terminal | `await` `or` `orMany` `toOne` |
 
 `flatMap(T -> Maybe<R>)` — returns `Maybe<R>`  
 `flatMapMany(T -> Many<R>)` — returns `Many<R>`  
@@ -116,10 +119,11 @@ flowchart LR
 
 | Category | Operators |
 |---|---|
-| Chain | `then(() -> One<R>)` `then(() -> Maybe<R>)` `then(() -> Many<R>)` `then(() -> None<R>)` |
+| Chain | `andThen(() -> One<R>)` `andThen(() -> Maybe<R>)` `andThen(() -> Many<R>)` `andThen(() -> None<R>)` |
+| Utility | `discard()` `thenReturn(value)` |
 | Terminal | `await` |
 
-`then` chains a subsequent publisher that runs after the side-effect completes, returning the appropriate type.
+`andThen` chains a subsequent publisher that runs after the side-effect completes, returning the appropriate type.
 
 ### zip
 
@@ -157,7 +161,8 @@ flowchart LR
 ```kotlin
 val sink = Sinks.broadcast<Int>()
 sink.asMany().filter { it > 0 }.subscribe(...)
-sink.emit(1)
+sink.emit(1)           // throws on overflow or after terminal
+sink.tryEmit(1)        // returns false instead of throwing
 sink.complete()
 ```
 
@@ -193,30 +198,29 @@ Test DSL included in the main artifact:
 ```kotlin
 Verify.that(publisher)
     .emitsNext(1, 2, 3)
-    .completesNormally()
+    .completes()
 
 // assert individual items
 Verify.that(publisher)
     .assertNext { assertEquals(1, it) }
-    .completesNormally()
+    .completes()
 
 // empty completion
-Verify.that(maybePublisher).completesEmpty()
+Verify.that(maybePublisher).emitsCount(0).completes()
 
 // error assertions
-Verify.that(publisher).failedWith<TimeoutException>()
+Verify.that(publisher).failsWith<TimeoutException>()
 ```
 
 | Method | Applicable to |
 |---|---|
-| `completesNormally()` | Many, One, Maybe, None |
-| `completesEmpty()` | Maybe, Many |
+| `completes()` | Many, One, Maybe, None |
 | `emitsNext(vararg values)` | Many, One |
 | `assertNext { predicate }` | Many, One, Maybe |
 | `emitsCount(n)` | Many |
-| `aborted()` | Many, One, Maybe, None |
-| `failed()` | Many, One, Maybe, None |
-| `failedWith<X>()` | Many, One, Maybe, None |
+| `cancels()` | Many, One, Maybe, None |
+| `fails()` | Many, One, Maybe, None |
+| `failsWith<X>()` | Many, One, Maybe, None |
 | `timesOut()` | Many, One, Maybe |
 
 ## RS Compliance
@@ -249,6 +253,4 @@ Any async operator routes through the full protocol with demand signalling and c
 
 ## Status
 
-Current release: `1.0.0-rc.7`
-
-All operators across `Many`, `One`, `Maybe`, and `None` are implemented and tested. `resource` bracket always runs release even on downstream cancel. `Either.success()`/`Either.failure()` companion factories added. `flatMapNone` on all four types. `doOn*` side-effect operators on all types. `subscribeOn`/`publishOn` on `Maybe` and `None`. `UnicastSink` now enforces single-subscriber semantics — a second subscriber receives `IllegalStateException` immediately. Operator files split by type: `ManyOperators.kt`, `OneOperators.kt`, `MaybeOperators.kt`, `NoneOperators.kt`. rc.6 adds KDoc comments to `delaySubscription` and `retry` on `One`, `Maybe`, and `None`, and expands test coverage for `delaySubscription(Duration)` on all four types and `retry(times)` on `Maybe` and `None`. No breaking changes are planned before `1.0.0`.
+Current release: `1.0.0-rc.7`. See [CHANGELOG.md](CHANGELOG.md) for full history.

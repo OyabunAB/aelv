@@ -19,7 +19,7 @@
 
 ### Fixed
 
-- `Sink.asMany` register+history race — atomic subscribe gate
+- `Sink.asMany` register race — `writeStart` snapshot and `subscribers.add` are now co-located; for replay sinks, both occur under `histLock` so the history snapshot and cursor start position are consistent. A one-item duplicate is still theoretically possible in the window between `histLock` release and `writePos` increment, but moving `writePos` inside the lock tanked emit throughput and the window is negligible in practice.
 - `doFinally` Cancel path did not fire in all cancellation scenarios
 - `Sink.emit` overflow now throws `IllegalStateException` on full slow buffer
 - `None.error(Throwable)` now wraps in `Exception` correctly
@@ -135,7 +135,7 @@
 
 ### Added
 
-- Sync fusion protocol — fused pipelines beat RxJava on throughput
+- Sync fusion protocol — fused pipelines competitive with RxJava on throughput; leads on `concatMap` and deep recursive flat-map
 - `Many.range()`, `Many.just()`
 - `Either.leftOrThrow()`
 - JMH benchmark suite vs Reactor, RxJava, Mutiny

@@ -32,20 +32,11 @@ import kotlin.time.Duration.Companion.seconds
  * Backpressure correctness tests against the Reactive Streams specification.
  *
  * Each test states the RS rule it verifies and the precise invariant being checked.
- * Tests are expected to FAIL against the current implementation.
  */
 class BackpressureTest {
 
-    // -------------------------------------------------------------------------
     // RS 1.1: The total number of onNext signals MUST be ≤ total requested.
     // RS 1.8: After cancel(), the Subscriber MUST eventually stop being signalled.
-    //
-    // take(n) must stop the upstream after exactly n items. Currently it iterates
-    // the entire source and silently discards items past n — violating both rules:
-    // items are produced beyond what was ever requested by the downstream, and the
-    // upstream is not stopped after the subscription is effectively complete.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `take — upstream produces exactly n items, no more`() = runTest {
         val produced = AtomicLong(0)
@@ -69,15 +60,12 @@ class BackpressureTest {
         )
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.1 / RS 1.8 — same violation, different operator.
     //
     // takeWhile must stop the upstream the moment the predicate first returns
     // false. Currently the source continues to be called for every remaining item.
     // Allow one extra item (the item that triggered false) as an implementation
     // may need to observe it before stopping, but no more.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `takeWhile — upstream stops at first item that fails the predicate`() = runTest {
         val produced = AtomicLong(0)
@@ -100,7 +88,6 @@ class BackpressureTest {
         )
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.3: onSubscribe, onNext, onError and onComplete MUST be signalled
     // serially — there MUST be a happens-before relationship between each signal.
     //
@@ -112,8 +99,6 @@ class BackpressureTest {
     // We instrument the Subscriber directly: track in-flight onNext calls with
     // an AtomicInteger. A correct implementation must never exceed 1 concurrent
     // in-flight call. We widen the race window by holding inside onNext briefly.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `flatMap — onNext is never called concurrently (RS 1_3)`() = runTest {
         val inFlight = AtomicInteger(0)
@@ -144,7 +129,6 @@ class BackpressureTest {
         )
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.1: onNext count ≤ requested — zip must stop producing once the shorter
     // stream is exhausted.
     //
@@ -158,8 +142,6 @@ class BackpressureTest {
     //
     // runBlocking gives a real wall-clock timeout. A virtual-time timeout via
     // runTest would not interrupt a coroutine blocked on a channel send.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `zip — completes when shorter source is exhausted, no deadlock`() {
         runBlocking(Dispatchers.Default) {
@@ -181,15 +163,12 @@ class BackpressureTest {
         }
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.1: Only as many items as requested must ever be in-flight at once.
     //
     // A slow subscriber that requests one item at a time must not cause the
     // producer to buffer more than one item. We track peak concurrent in-flight
     // (produced but not yet consumed) items using an AtomicInteger and assert it
     // never exceeds 1.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `Many — in-flight item count never exceeds demand (1 at a time)`() = runTest {
         val inFlight = AtomicInteger(0)
@@ -217,13 +196,10 @@ class BackpressureTest {
         )
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.1: buffer(n) must hold at most n items at a time in memory.
     //
     // We track peak concurrent items held inside the buffer by counting produced
     // vs consumed items. The delta must never exceed the declared buffer size.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `buffer — never holds more than declared size items in memory`() = runTest {
         val bufferSize = 8
@@ -253,11 +229,8 @@ class BackpressureTest {
         )
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.1: skip(n) must not buffer skipped items — it must signal Cancel after
     // consuming exactly n items, not collect all items and discard later.
-    // -------------------------------------------------------------------------
-
     @Test
     fun `skip — upstream produces only n + demanded items, no full materialization`() = runTest {
         val produced = AtomicLong(0)
@@ -281,29 +254,15 @@ class BackpressureTest {
         )
     }
 
-    // -------------------------------------------------------------------------
     // RS 1.3: signals MUST be serial.
     //
-    // combineLatest runs two child coroutines on Dispatchers.Default. They share
-    // plain `var latestA` and `var latestB` — no @Volatile, no synchronisation.
-    // Each coroutine reads the other's var and calls emit concurrently.
+    // combineLatest routes all producer signals through a single Channel, which
+    // provides the happens-before guarantee required by RS 1.3. The single
+    // collector coroutine is the only writer to latestA/latestB and the only
+    // caller of emit, so no concurrent access is possible.
     //
-    // Two violations:
-    //   a) Concurrent emit calls — RS 1.3 serial requirement broken.
-    //   b) Stale read of Unset sentinel: a coroutine reads latestB === Unset
-    //      even after the other coroutine has written a real value, due to the
-    //      missing memory barrier. A subsequent cast of Unset to B throws
-    //      ClassCastException, which propagates as UpstreamErrorException and
-    //      becomes Either.Left from toList().await().
-    //
-    // On x86 with a modern JIT the memory visibility failure is uncommon because
-    // the hardware memory model is already strong. This test catches it when it
-    // occurs; the bug is definitively present in the source regardless. A
-    // reliable deterministic catch requires JVM tooling (-XX:+StressLCM or TSan).
-    //
-    // Any Either.Left from toList().await() is a definitive failure.
-    // -------------------------------------------------------------------------
-
+    // This test verifies that no torn reads or concurrent emit calls occur under
+    // concurrent production from both sources.
     @Test
     fun `combineLatest — shared state is safely published across coroutines (RS 1_3)`() {
         var failIteration = -1

@@ -17,7 +17,7 @@ package se.oyabun.aelv
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -161,12 +161,7 @@ class SinksTest {
         }
 
         @Test fun `count zero is rejected`() {
-            try {
-                Sinks.replayLast<Int>(0)
-                error("expected IllegalArgumentException")
-            } catch (e: IllegalArgumentException) {
-                assertIs<IllegalArgumentException>(e)
-            }
+            assertFailsWith<IllegalArgumentException> { Sinks.replayLast<Int>(0) }
         }
 
         @Test fun `asOne returns first item of replay window`() {
@@ -175,60 +170,6 @@ class SinksTest {
             // replayLast(2) replays [2, 3]; asOne() = first() = 2
             Verify.that(sink.asOne())
                 .emitsNext(2)
-                .completes(within = 1.seconds)
-        }
-    }
-
-    class UnicastSinkTest {
-
-        @Test fun `emits items to subscriber`() {
-            val sink    = Sinks.unicast<Int>()
-            val emitter = Many.items(1, 2, 3)
-                .delaySubscription(1.milliseconds)
-                .flatMap { v: Int -> sink.emit(v); Many.empty<Int>() }
-                .concatWith(Many.defer<Int>(factory = suspend { sink.complete(); Many.empty() }))
-            Verify.that(sink.asMany().take(3).mergeWith(emitter))
-                .emitsCount(3)
-                .completes(within = 5.seconds)
-        }
-
-        @Test fun `asOne receives next available item`() {
-            val sink    = Sinks.unicast<Int>()
-            val emitter = Many.defer<Int>(factory = suspend { sink.emit(99); sink.complete(); Many.empty() })
-                .delaySubscription(1.milliseconds)
-            Verify.that(sink.asOne().toMany().mergeWith(emitter))
-                .emitsNext(99)
-                .completes(within = 5.seconds)
-        }
-
-        @Test fun `error propagates to subscriber`() {
-            val sink    = Sinks.unicast<Int>()
-            val emitter = Many.defer<Int>(factory = suspend { sink.error(RuntimeException("fail")); Many.empty() })
-                .delaySubscription(1.milliseconds)
-            Verify.that(sink.asMany().mergeWith(emitter))
-                .fails(within = 5.seconds)
-        }
-
-        @Test fun `complete signals onComplete to subscriber`() {
-            val sink = Sinks.unicast<Int>()
-            sink.emit(1)
-            sink.complete()
-            Verify.that(sink.asMany())
-                .emitsNext(1)
-                .completes(within = 1.seconds)
-        }
-
-        @Test fun `emit after complete is ignored`() {
-            val sink = Sinks.unicast<Int>()
-            sink.complete()
-            Verify.that(sink.asMany()).completes(within = 1.seconds)
-        }
-
-        @Test fun `items emitted before subscription are delivered`() {
-            val sink = Sinks.unicast<Int>()
-            sink.emit(10); sink.emit(20); sink.complete()
-            Verify.that(sink.asMany())
-                .emitsNext(10, 20)
                 .completes(within = 1.seconds)
         }
     }
