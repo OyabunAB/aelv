@@ -68,6 +68,22 @@ open class ReactorBenchmark {
             .flatMap { i -> Flux.just(i, i + 1, i + 2) }
             .collectList().block()!!.size
 
+    private fun ioWork(i: Int): reactor.core.publisher.Flux<Int> =
+        Mono.delay(java.time.Duration.ofMillis(Workload.IO_DELAY_MS), Schedulers.parallel())
+            .thenMany(Flux.range(i, Workload.ITEMS_PER_CALL))
+
+    @Benchmark
+    fun flatMap_io(): Int =
+        Flux.range(0, size / 10)
+            .flatMap { i -> ioWork(i) }
+            .collectList().block()!!.size
+
+    @Benchmark
+    fun concatMap_io(): Int =
+        Flux.range(0, size / 10)
+            .concatMap { i -> ioWork(i) }
+            .collectList().block()!!.size
+
     @Benchmark
     fun sink_multicast_single_subscriber(): Int {
         val sink = Sinks.many().multicast().onBackpressureBuffer<Int>(size * 2)

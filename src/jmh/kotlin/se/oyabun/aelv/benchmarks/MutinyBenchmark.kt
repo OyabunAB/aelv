@@ -65,6 +65,23 @@ open class MutinyBenchmark {
             .onItem().transformToMultiAndMerge { i -> Multi.createFrom().items(i, i + 1, i + 2) }
             .collect().asList().await().indefinitely().size
 
+    private fun ioWork(i: Int): io.smallrye.mutiny.Multi<Int> =
+        Uni.createFrom().nullItem<Void>()
+            .onItem().delayIt().by(java.time.Duration.ofMillis(Workload.IO_DELAY_MS))
+            .onItem().transformToMulti { Multi.createFrom().range(i, i + Workload.ITEMS_PER_CALL) }
+
+    @Benchmark
+    fun many_flatMap_io(): Int =
+        Multi.createFrom().range(0, size / 10)
+            .onItem().transformToMultiAndMerge { i -> ioWork(i) }
+            .collect().asList().await().indefinitely().size
+
+    @Benchmark
+    fun many_concatMap_io(): Int =
+        Multi.createFrom().range(0, size / 10)
+            .onItem().transformToMultiAndConcatenate { i -> ioWork(i) }
+            .collect().asList().await().indefinitely().size
+
     @Benchmark
     fun many_fold_sum(): Long =
         Multi.createFrom().range(0, size)

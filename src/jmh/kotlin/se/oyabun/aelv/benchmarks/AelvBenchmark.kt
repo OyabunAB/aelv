@@ -100,6 +100,28 @@ open class AelvBenchmark {
                 .toList().await()
         }.rightOrThrow().size
 
+    private fun ioWork(i: Int): Many<Int> = Many.generate { emit ->
+        kotlinx.coroutines.delay(Workload.IO_DELAY_MS)
+        for (k in 0 until Workload.ITEMS_PER_CALL) emit(Signal.Upstream.Next(i + k))
+        emit(Signal.Upstream.Complete)
+    }
+
+    @Benchmark
+    fun many_flatMap_concurrent_io(): Int =
+        run {
+            Many.range(0, size / 10)
+                .flatMap(concurrency = 256) { i -> ioWork(i) }
+                .toList().await()
+        }.rightOrThrow().size
+
+    @Benchmark
+    fun many_concatMap_io(): Int =
+        run {
+            Many.range(0, size / 10)
+                .concatMap { i -> ioWork(i) }
+                .toList().await()
+        }.rightOrThrow().size
+
     @Benchmark
     fun many_fold_sum(): Long =
         run {

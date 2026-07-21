@@ -64,6 +64,22 @@ open class RxJavaBenchmark {
             .flatMap { i -> Observable.just(i, i + 1, i + 2) }
             .toList().blockingGet().size
 
+    private fun ioWork(i: Int): Observable<Int> =
+        io.reactivex.rxjava3.core.Observable.timer(Workload.IO_DELAY_MS, java.util.concurrent.TimeUnit.MILLISECONDS, io.reactivex.rxjava3.schedulers.Schedulers.computation())
+            .flatMap { Observable.range(i, Workload.ITEMS_PER_CALL) }
+
+    @Benchmark
+    fun flatMap_io(): Int =
+        Observable.range(0, size / 10)
+            .flatMap { i -> ioWork(i) }
+            .toList().blockingGet().size
+
+    @Benchmark
+    fun concatMap_io(): Int =
+        Observable.range(0, size / 10)
+            .concatMap { i -> ioWork(i) }
+            .toList().blockingGet().size
+
     @Benchmark
     fun fold_sum(): Long =
         Observable.range(0, size)
