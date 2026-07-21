@@ -37,16 +37,23 @@ val effect: None<Unit>  = None.defer { db.commit() }
 
 ## Signals
 
-Every interaction between producer and consumer flows through `Signal`:
+Two directions of signal flow:
 
 ```mermaid
 %%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart LR
-    N[Next] --> R[Request n]
-    C[Complete] --> X[Cancel]
-    E[Error] --> X
-    N --> X
+    subgraph Upstream ["Upstream (publisher → subscriber)"]
+        N[Next]
+        C[Complete]
+        E[Error]
+    end
+    subgraph Downstream ["Downstream (subscriber → publisher)"]
+        R[Request]
+        X[Cancel]
+    end
 ```
+
+`Complete`, `Error`, and `Cancel` are all `Terminal` — a stream ends exactly once via one of these three.
 
 ## Operators
 

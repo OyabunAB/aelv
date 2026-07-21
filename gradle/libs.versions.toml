@@ -12,7 +12,6 @@ reactor           = "3.8.6"
 rxjava            = "3.1.12"
 mutiny            = "3.3.0"
 monix             = "3.4.1"
-zio               = "2.1.26"
 
 [libraries]
 reactive_streams     = { group = "org.reactivestreams",      name = "reactive-streams",            version.ref = "reactive_streams" }
@@ -31,10 +30,9 @@ reactor_core         = { group = "io.projectreactor",        name = "reactor-cor
 rxjava               = { group = "io.reactivex.rxjava3",     name = "rxjava",                      version.ref = "rxjava" }
 mutiny               = { group = "io.smallrye.reactive",     name = "mutiny",                      version.ref = "mutiny" }
 monix_reactive       = { group = "io.monix",                 name = "monix-reactive_2.13",           version.ref = "monix" }
-zio_streams          = { group = "dev.zio",                  name = "zio-streams_2.13",              version.ref = "zio" }
 
 [bundles]
-jmh_benchmarks       = ["jmh_core", "reactor_core", "rxjava", "mutiny", "coroutines_core", "monix_reactive", "zio_streams"]
+jmh_benchmarks       = ["jmh_core", "reactor_core", "rxjava", "mutiny", "coroutines_core", "monix_reactive"]
 tck                  = ["reactive_streams_tck", "testng", "logback_classic"]
 test                 = ["kotlin_test", "kotlin_test_junit5", "coroutines_test", "logback_classic"]
 core_api             = ["reactive_streams"]

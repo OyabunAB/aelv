@@ -290,6 +290,11 @@ class One<T : Any> private constructor(
             if (onNext(value) != Signal.Downstream.Cancel) onComplete()
         })
 
+        /**
+         * Creates a [One] that executes [closure] on each subscription, emitting its return value.
+         * Exceptions thrown by [closure] are caught and routed to [onError].
+         * Use [context] to shift execution to a specific [CoroutineContext].
+         */
         fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> T): One<T> =
             One(Step.Suspend { onNext, onComplete, _ ->
                 val value = if (context != null) withContext(currentCoroutineContext() + context) { closure() } else closure()
@@ -401,6 +406,12 @@ class Maybe<T : Any> private constructor(
 
         fun <T : Any> never(): Maybe<T> = Maybe(Step.Never)
 
+        /**
+         * Creates a [Maybe] that executes [closure] on each subscription.
+         * If [closure] returns a non-null value, that value is emitted and the stream completes.
+         * If [closure] returns null, the stream completes empty.
+         * Exceptions are caught and routed to [onError].
+         */
         fun <T : Any> defer(closure: suspend () -> T?): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
             try {
                 val value = closure()
@@ -483,6 +494,11 @@ class None<T : Any> private constructor(
     }
 
     companion object {
+        /**
+         * Creates a [None] that executes [closure] as a side-effect on each subscription.
+         * Exceptions thrown by [closure] are caught and routed to [onError].
+         * Use [context] to shift execution to a specific [CoroutineContext].
+         */
         fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> Unit): None<T> =
             None(Step.Suspend { _, onComplete, onError ->
                 try {
