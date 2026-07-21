@@ -27,24 +27,27 @@ class Verify<T : Any> private constructor(
     private val pipeline:   Observable<T, *>,
     private val context:    CoroutineContext = EmptyCoroutineContext,
     private val assertions: List<(List<T>) -> Unit> = emptyList(),
+    private val nextIndex:  Int = 0,
 ) {
 
-    fun assertNext(assertion: (T) -> Unit): Verify<T> =
-        Verify(pipeline, context, assertions + { items ->
-            if (items.isEmpty()) throw UnexpectedValueError("expected at least one item but stream was empty")
-            assertion(items.first())
-        })
+    fun assertNext(assertion: (T) -> Unit): Verify<T> {
+        val index = nextIndex
+        return Verify(pipeline, context, assertions + { items ->
+            if (items.size <= index) throw UnexpectedValueError("expected at least ${index + 1} item(s) but stream emitted ${items.size}")
+            assertion(items[index])
+        }, nextIndex + 1)
+    }
 
     fun emitsNext(vararg values: T): Verify<T> =
         Verify(pipeline, context, assertions + { items ->
-            val actual = items.take(values.size)
+            val actual = items.drop(nextIndex).take(values.size)
             if (actual != values.toList()) throw UnexpectedValueError("expected ${values.toList()} but got $actual")
-        })
+        }, nextIndex + values.size)
 
     fun emitsCount(count: Long): Verify<T> =
         Verify(pipeline, context, assertions + { items ->
             if (items.size.toLong() != count) throw UnexpectedValueError("expected $count items but got ${items.size}")
-        })
+        }, nextIndex)
 
     private fun runPipeline(within: Duration): Signal.Terminal {
         val items = mutableListOf<T>()

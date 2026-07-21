@@ -207,7 +207,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
     val queue      = java.util.concurrent.ConcurrentLinkedQueue<R>()
     val wip        = java.util.concurrent.atomic.AtomicInteger(0)
     val cancelled  = java.util.concurrent.atomic.AtomicBoolean(false)
-    var outerError: Any = Unset
+    val outerError = java.util.concurrent.atomic.AtomicReference<Any>(Unset)
 
     suspend fun drain() {
         do {
@@ -236,7 +236,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
                                 if (cancelled.get()) Signal.Downstream.Cancel else Signal.Downstream.Request
                             },
                             { },
-                            { issue -> if (outerError === Unset) outerError = issue },
+                            { issue -> outerError.compareAndSet(Unset, issue) },
                         )
                     } finally {
                         semaphore.release()
@@ -245,13 +245,13 @@ fun <T : Any, R : Any> Many<T>.flatMap(
                 Signal.Downstream.Request
             },
             { },
-            { issue -> if (outerError === Unset) outerError = issue },
+            { issue -> outerError.compareAndSet(Unset, issue) },
         )
     }
     when {
-        cancelled.get()      -> {}
-        outerError.isError() -> emit(Signal.Upstream.Error(outerError.asError()))
-        else                 -> emit(Signal.Upstream.Complete)
+        cancelled.get()           -> {}
+        outerError.get().isError() -> emit(Signal.Upstream.Error(outerError.get().asError()))
+        else                      -> emit(Signal.Upstream.Complete)
     }
 }
 
@@ -526,7 +526,7 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
 
             fun resetTimer() {
                 timer.cancel()
-                timer = TimerState.Running(launch { delay(timeout); events.trySend(BufferEvent.TimerFlush) })
+                timer = TimerState.Running(launch { delay(timeout); events.send(BufferEvent.TimerFlush) })
             }
 
             suspend fun flushBucket(): Boolean {

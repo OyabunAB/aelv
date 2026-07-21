@@ -244,7 +244,6 @@ private suspend fun execSuspend(
         else -> error("execSuspend: $step")
     }
 
-    var cancelled = false
     block(
         { item ->
             val sig = when (val node = frame) {
@@ -263,7 +262,6 @@ private suspend fun execSuspend(
                 }
                 else -> applyFrame(item, frame, todo)
             }
-            if (sig == Signal.Downstream.Cancel) cancelled = true
             sig
         },
         {},
