@@ -174,3 +174,5 @@ suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> {
         result
     }
 }
+
+fun <T : Any> Maybe<T>.concatWith(other: Maybe<T>): Many<T> = concat(toMany(), other.toMany())

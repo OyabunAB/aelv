@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Slow-path buffer for promoted subscribers. Grows freely up to [max], then rejects. */
@@ -123,12 +124,10 @@ sealed class Sink<T : Any>(
         writePos = pos + 1                                  // volatile write — subscribers see buffer[pos]
 
         for (sub in subscribers) {
-            if (sub.promoted) {
-                if (!sub.slowQueue!!.add(value))
-                    throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or maxSlowBuffer too small")
-            }
+            if (sub.promoted && !sub.slowQueue!!.add(value))
+                throw IllegalStateException("Sink subscriber buffer overflow — slow subscriber or maxSlowBuffer too small")
+            if (sub.waiting) sub.wakeup.trySend(Unit)
         }
-        for (sub in subscribers) if (sub.waiting) sub.wakeup.trySend(Unit)
     }
 
     /** Promote [sub] to its dedicated slow-path queue; backfill its unread ring slots. */
@@ -219,6 +218,11 @@ sealed class Sink<T : Any>(
                     }
                     if (terminal.isSet()) { generatorEmit(terminal.get() as Signal.Upstream<T>); return@generate }
                     if (!drained) {
+                        var spins = 0
+                        while (handle.cursor >= writePos && !terminal.isSet() && spins++ < 100) {
+                            yield()
+                        }
+                        if (handle.cursor < writePos || terminal.isSet()) continue
                         handle.waiting = true
                         if (handle.cursor >= writePos) {
                             handle.wakeup.receive()

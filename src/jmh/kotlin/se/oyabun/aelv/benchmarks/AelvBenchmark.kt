@@ -33,7 +33,6 @@ import se.oyabun.aelv.One
 import se.oyabun.aelv.Sinks
 import se.oyabun.aelv.await
 import se.oyabun.aelv.concatMap
-import se.oyabun.aelv.drain
 import se.oyabun.aelv.filter
 import se.oyabun.aelv.flatMap
 import se.oyabun.aelv.flatMapMany
@@ -44,7 +43,6 @@ import se.oyabun.aelv.merge
 import se.oyabun.aelv.rightOrThrow
 import se.oyabun.aelv.take
 import se.oyabun.aelv.toList
-import se.oyabun.aelv.Verify
 
 @BenchmarkMode(Mode.Throughput)
 @State(JmhScope.Thread)
@@ -147,22 +145,14 @@ open class AelvBenchmark {
     }
 
     @Benchmark
-    fun sink_replay_four_subscribers(): Int {
-        val sink = Sinks.replay<Int>()
-        val s1 = sink.asMany().take(size.toLong())
-        val s2 = sink.asMany().take(size.toLong())
-        val s3 = sink.asMany().take(size.toLong())
-        val s4 = sink.asMany().take(size.toLong())
-        Verify.that(
-            merge(s1, s2, s3, s4)
-                .toList()
-                .doOnSubscribe {
-                    repeat(size) { sink.emit(it) }
-                    sink.complete()
-                }
-        )
-        .assertNext { list -> check(list.size == size * 4) }
-        .completes()
-        return size
+    fun sink_broadcast_four_subscribers(): Int {
+        val sink = Sinks.broadcast<Int>()
+        val jobs = List(4) {
+            scope.launch { sink.asMany().take(size.toLong()).toList().await() }
+        }
+        repeat(size) { sink.emit(it) }
+        sink.complete()
+        run { jobs.forEach { it.join() } }
+        return size * 4
     }
 }

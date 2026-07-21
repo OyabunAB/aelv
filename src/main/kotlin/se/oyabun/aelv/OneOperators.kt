@@ -166,3 +166,5 @@ fun <T : Any> One<T>.cache(): One<T> {
 
 fun <A : Any, B : Any, R : Any> One<A>.zipWith(other: One<B>, transform: (A, B) -> R): One<R> =
     zip(this, other, transform)
+
+fun <T : Any> One<T>.concatWith(other: One<T>): Many<T> = concat(toMany(), other.toMany())

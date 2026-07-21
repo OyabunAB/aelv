@@ -681,6 +681,8 @@ fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
 
 fun <T : Any> Many<T>.concatWith(other: Many<T>): Many<T> = concat(this, other)
 
+fun <T : Any, B : Any, R : Any> Many<T>.zipWith(other: Many<B>, transform: (T, B) -> R): Many<R> = zip(this, other, transform)
+
 fun <T : Any> Many<T>.flatMapNone(transform: (T) -> None<T>): None<T> =
     concatMap { transform(it).toMany() }.discard()
 
