@@ -39,7 +39,7 @@ java -jar build/libs/aelv-*-jmh.jar ".*_io" -wi 3 -i 5 -f 1 -p size=1000 -tu ms
 
 | Benchmark | aelv | RxJava | Mutiny | Reactor |
 |---|---:|---:|---:|---:|
-| flatMap_io (concurrent) | 0.78 | 0.85 | 0.73 | 0.83 |
+| flatMap_io (concurrent) | 0.80 | **0.86** | 0.67 | 0.76 |
 | concatMap_io (sequential) | 0.009 | 0.009 | 0.009 | 0.009 |
 
 **All four libraries achieve ~87× speedup** from concurrent vs sequential execution.
