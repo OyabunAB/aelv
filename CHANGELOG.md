@@ -78,7 +78,7 @@
 - `Verify.timesOut(within)` — asserts the stream fires `ExceededTimeoutException` within the deadline
 - `scan(initial, accumulate)` operator on `Many`
 - `Many.defer(suspend () -> Many<T>)` suspend factory variant
-- `Either.getOrThrow()`, `Either.required()` utilities
+- `Either.rightOrThrow()` utility
 - Suspend overloads for `map`, `flatMap`, `concatMap`, `filter`, `doOn*`, `recover`, `fold`, `defer` — annotated `@LowPriorityInOverloadResolution`
 
 ### Changed
@@ -136,7 +136,7 @@
 ### Added
 
 - Sync fusion protocol — fused pipelines competitive with RxJava on throughput; leads on `concatMap` and deep recursive flat-map
-- `Many.range()`, `Many.just()`
+- `Many.range()`, `Many.items()`
 - `Either.leftOrThrow()`
 - JMH benchmark suite vs Reactor, RxJava, Mutiny
 - Dependabot configuration

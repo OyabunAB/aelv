@@ -6,25 +6,11 @@ Minimalistic reactive streams for Kotlin. Implements the [Reactive Streams](http
 
 - Kotlin 2.x
 - JVM 21+
-- GitHub Packages credentials (`GITHUB_ACTOR` / `GITHUB_TOKEN`)
 
 ## Install
 
 ```kotlin
-// build.gradle.kts
-repositories {
-    maven {
-        url = uri("https://maven.pkg.github.com/OyabunAB/aelv")
-        credentials {
-            username = System.getenv("GITHUB_ACTOR")
-            password = System.getenv("GITHUB_TOKEN")
-        }
-    }
-}
-
-dependencies {
-    implementation("se.oyabun:aelv:1.0.0-rc.7")
-}
+implementation("se.oyabun:aelv:1.0.0")
 ```
 
 ## Types
@@ -254,4 +240,4 @@ Any async operator routes through the full protocol with demand signalling and c
 
 ## Status
 
-Current release: `1.0.0-rc.7`. See [CHANGELOG.md](CHANGELOG.md) for full history.
+See [CHANGELOG.md](CHANGELOG.md) for full history.

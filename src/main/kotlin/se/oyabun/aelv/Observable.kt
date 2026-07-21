@@ -34,7 +34,11 @@ import org.reactivestreams.Publisher
 sealed interface Source<out T : Any>
 
 /**
- * Internal base for [Many], [One], [Maybe], and [None].
+ * Base type for all aelv publishers: [Many], [One], [Maybe], and [None].
+ *
+ * [Observable] is part of the public API — it appears as a parameter type in [Verify.that]
+ * and extension functions such as [discard] and [thenReturn]. Use it when writing code that
+ * accepts any aelv publisher type.  It cannot be extended outside the module.
  *
  * Stores the computation as a [Step] ADT node and executes it through the heap-allocated
  * trampoline interpreter, giving all four types O(1) stack depth for arbitrary operator chains.
@@ -52,6 +56,11 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
         onError:    OnError,
     ) {
         when (val result = interpret(step, Frame.Collect(onNext))) {
+            // Note: Step.Suspend sources that exit early due to downstream cancel return Success(true),
+            // causing onComplete() to fire after a cancel — a structural RS §1.7 violation.
+            // In practice this is harmless: StreamSubscription guards with terminated.compareAndSet,
+            // and operators that use source() directly (zip, combineLatest) never observe the signal
+            // because their channels are already closed or cancelled at that point.
             is Success -> if (result.value) onComplete()
             is Failure -> onError(result.value)
         }
