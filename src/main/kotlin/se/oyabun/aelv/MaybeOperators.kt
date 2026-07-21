@@ -21,8 +21,6 @@ import kotlin.experimental.ExperimentalTypeInference
 import kotlin.internal.LowPriorityInOverloadResolution
 import kotlinx.coroutines.CancellationException
 
-private val log = Logging.of<Maybe<*>>()
-
 fun <T : Any, R : Any> Maybe<T>.map(transform: (T) -> R): Maybe<R> {
     val currentFusion = fusion
     return Maybe.fromStep(Step.Map(step, transform), if (currentFusion is Fusion.Available) MapFusion(currentFusion, transform) else Fusion.None)
@@ -47,11 +45,14 @@ fun <T : Any> Maybe<T>.filter(predicate: (T) -> Boolean): Maybe<T> {
 @LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
     Maybe { onNext, onComplete, onError ->
+        var emitComplete = false
         source(
-            { value -> if (predicate(value)) onNext(value) else { onComplete(); Signal.Downstream.Cancel } },
+            { value -> if (predicate(value)) onNext(value) else { emitComplete = true; Signal.Downstream.Cancel } },
             onComplete,
             onError,
         )
+        // Call onComplete after source() returns, not from inside the onNext callback — RS §1.3.
+        if (emitComplete) onComplete()
     }
 
 fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): Maybe<R> =
@@ -93,7 +94,7 @@ fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: suspend (T) -> Many<R>): 
  *
  * Useful for fire-and-forget side effects that should be skipped when no value is present.
  */
-fun <T : Any> Maybe<T>.flatMapNone(transform: suspend (T) -> None<*>): None<T> =
+fun <T : Any> Maybe<T>.flatMapNone(transform: suspend (T) -> None<T>): None<T> =
     toMany().flatMapNone(transform)
 
 /**

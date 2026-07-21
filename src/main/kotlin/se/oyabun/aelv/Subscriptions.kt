@@ -17,28 +17,32 @@ package se.oyabun.aelv
 
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+
+private sealed interface ProducerState {
+    data object Idle                : ProducerState
+    data class  Running(val job: Job) : ProducerState
+    fun cancel() = if (this is Running) job.cancel() else Unit
+}
 
 internal sealed interface SubscriptionState {
     data object Unbound                      : SubscriptionState
     data class  Bound(val subscription: Subscription) : SubscriptionState
 }
 
-private val dispatcher = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()) { r ->
-    Thread(r, "aelv-worker").also { it.isDaemon = true }
-}.asCoroutineDispatcher()
+/** Sentinel demand value meaning the subscriber accepts items at any rate — RS §3.17. */
+internal const val UNBOUNDED = Long.MAX_VALUE
 
-private val sharedScope = CoroutineScope(dispatcher + SupervisorJob())
+private val sharedScope = CoroutineScope(Dispatchers.cpu + SupervisorJob())
 
 private val noopJob: Job = Job().also { it.cancel() }
 
@@ -54,9 +58,9 @@ internal fun <S> S.deliverSubscription(
 internal class StreamSubscription<T : Any>(
     private val subscriber: Subscriber<in T>,
     private val source: suspend (
-        onNext: suspend (T) -> Signal.Downstream,
-        onComplete: suspend () -> Unit,
-        onError: suspend (Exception) -> Unit,
+        onNext:     OnNext<T>,
+        onComplete: OnComplete,
+        onError:    OnError,
     ) -> Unit,
 ) : Subscription {
 
@@ -67,7 +71,7 @@ internal class StreamSubscription<T : Any>(
     private val signal     by lazy { Channel<Unit>(Channel.UNLIMITED) }  // only allocated for bounded demand
     private val terminated = AtomicBoolean(false)
     private val started    = AtomicBoolean(false)
-    private val producer   = AtomicReference(noopJob)
+    private val producer   = AtomicReference<ProducerState>(ProducerState.Idle)
 
     internal fun onSubscribeComplete() {
         // onSubscribe has returned — safe to start the producer now (RS §1.3: serial signals)
@@ -78,20 +82,25 @@ internal class StreamSubscription<T : Any>(
         log.stream.subscribing(name)
         val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
             if (terminated.compareAndSet(false, true)) {
-                val exception = if (throwable is Exception) throwable else RuntimeException(throwable)
-                log.stream.error(name, exception)
-                subscriber.onError(exception)
+                if (throwable is Exception) {
+                    log.stream.error(name, throwable)
+                    subscriber.onError(throwable)
+                } else {
+                    val exception = RuntimeException(throwable)
+                    log.stream.unexpectedThrowable(name, throwable)
+                    subscriber.onError(exception)
+                }
             }
             shutdown()
         }
-        val onComplete: suspend () -> Unit = {
+        val onComplete: OnComplete = {
             if (terminated.compareAndSet(false, true)) {
                 log.stream.completed(name)
                 subscriber.onComplete()
             }
             shutdown()
         }
-        val onError: suspend (Exception) -> Unit = { cause ->
+        val onError: OnError = { cause ->
             if (terminated.compareAndSet(false, true)) {
                 log.stream.error(name, cause)
                 subscriber.onError(cause)
@@ -99,7 +108,7 @@ internal class StreamSubscription<T : Any>(
             shutdown()
         }
         val producerJob = sharedScope.launch(exceptionHandler) {
-            if (demand.get() == Long.MAX_VALUE) {
+            if (demand.get() == UNBOUNDED) {
                 // Fast path: unbounded demand — skip awaitDemand() and CAS per item
                 source(
                     { value ->
@@ -115,7 +124,7 @@ internal class StreamSubscription<T : Any>(
                     { value ->
                         awaitDemand()
                         if (terminated.get()) return@source Signal.Downstream.Cancel
-                        demand.updateAndGet { d -> if (d == Long.MAX_VALUE) d else d - 1 }
+                        demand.updateAndGet { d -> if (d == UNBOUNDED) d else d - 1 }
                         subscriber.onNext(value)
                         if (terminated.get()) Signal.Downstream.Cancel else Signal.Downstream.Request
                     },
@@ -124,12 +133,12 @@ internal class StreamSubscription<T : Any>(
                 )
             }
         }
-        producer.set(producerJob)
+        producer.set(ProducerState.Running(producerJob))
         if (terminated.get()) producerJob.cancel()
     }
 
     private fun shutdown() {
-        if (demand.get() < Long.MAX_VALUE) signal.close()  // only close if it was ever allocated
+        if (demand.get() < UNBOUNDED) signal.close()  // only close if it was ever allocated
     }
 
     override fun request(n: Long) {
@@ -143,9 +152,11 @@ internal class StreamSubscription<T : Any>(
         }
         log.subscription.requested(name, n)
         demand.updateAndGet { current ->
-            if (current >= Long.MAX_VALUE / 2) Long.MAX_VALUE else current + n
+            // RS §3.17: cumulative demand overflow must be treated as unbounded.
+            // Check headroom before adding to avoid signed overflow.
+            if (UNBOUNDED - current < n) UNBOUNDED else current + n
         }
-        if (demand.get() < Long.MAX_VALUE) signal.trySend(Unit)  // only meaningful for bounded demand
+        if (demand.get() < UNBOUNDED) signal.trySend(Unit)  // only meaningful for bounded demand
     }
 
     override fun cancel() {
@@ -159,7 +170,7 @@ internal class StreamSubscription<T : Any>(
     private suspend fun awaitDemand() {
         while (!terminated.get()) {
             val currentDemand = demand.get()
-            if (currentDemand == Long.MAX_VALUE || currentDemand > 0L) return
+            if (currentDemand == UNBOUNDED || currentDemand > 0L) return
             log.subscription.backpressure(name)
             val result = signal.receiveCatching()
             if (result.isClosed) return
@@ -177,7 +188,7 @@ internal class CompletionSubscription(
 
     private val terminated    = AtomicBoolean(false)
     private val started       = AtomicBoolean(false)
-    private val producer      = AtomicReference(noopJob)
+    private val producer      = AtomicReference<ProducerState>(ProducerState.Idle)
 
     internal fun onSubscribeComplete() {
         if (started.compareAndSet(false, true)) start()
@@ -187,9 +198,14 @@ internal class CompletionSubscription(
         log.stream.subscribing(name)
         val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
             if (terminated.compareAndSet(false, true)) {
-                val exception = if (throwable is Exception) throwable else RuntimeException(throwable)
-                log.stream.error(name, exception)
-                subscriber.onError(exception)
+                if (throwable is Exception) {
+                    log.stream.error(name, throwable)
+                    subscriber.onError(throwable)
+                } else {
+                    val exception = RuntimeException(throwable)
+                    log.stream.unexpectedThrowable(name, throwable)
+                    subscriber.onError(exception)
+                }
             }
         }
         val producerJob = sharedScope.launch(exceptionHandler) {
@@ -199,7 +215,7 @@ internal class CompletionSubscription(
                 subscriber.onComplete()
             }
         }
-        if (!producer.compareAndSet(noopJob, producerJob)) producerJob.cancel()
+        if (!producer.compareAndSet(ProducerState.Idle, ProducerState.Running(producerJob))) producerJob.cancel()
     }
 
     override fun request(n: Long) {

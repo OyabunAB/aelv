@@ -32,8 +32,21 @@ internal fun rethrow(issue: Exception): Nothing = throw issue
 fun Exception.leftUnlessCancelled(): Either<Exception, Nothing> =
     if (this is CancellationException) throw this else this.left()
 
-internal suspend fun <T> Flow<T>.collectCancelling(block: suspend (T) -> Boolean) =
-    try { coroutineScope { collect { if (!block(it)) cancel() } } } catch (_: CancellationException) {}
+internal suspend fun <T> Flow<T>.collectCancelling(block: suspend (T) -> Boolean) {
+    var selfCancelled = false
+    try {
+        coroutineScope {
+            collect {
+                if (!block(it)) {
+                    selfCancelled = true
+                    cancel()
+                }
+            }
+        }
+    } catch (e: CancellationException) {
+        if (!selfCancelled) throw e
+    }
+}
 
 internal suspend inline fun <C : AutoCloseable, V> C.using(block: suspend (C) -> V): V =
     try { block(this) } finally { close() }

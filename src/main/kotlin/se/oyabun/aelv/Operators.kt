@@ -221,11 +221,18 @@ private suspend fun <R : Any, T : Any> bracket(
     resource: R,
     release:  (R, Either<Throwable, Unit>) -> None<*>,
     emit:     suspend (Signal.Upstream<T>) -> Signal.Downstream,
-    use:      Many<T>,
+    use:      () -> Many<T>,
 ) {
+    val stream = try {
+        use()
+    } catch (e: Exception) {
+        release(resource, Either.failure(e)).toMany().collect { Signal.Downstream.Request }
+        emit(Signal.Upstream.Error(e))
+        return
+    }
     var error: Exception? = null
     var cancelled = false
-    val result = use.collect { value ->
+    val result = stream.collect { value ->
         emit(Signal.Upstream.Next(value)).also { if (it == Signal.Downstream.Cancel) cancelled = true }
     }
     if (result is Failure) error = result.value
@@ -244,7 +251,7 @@ fun <R : Any, T : Any> Many.Companion.resource(
     use:     (R) -> Many<T>,
 ): Many<T> =
     acquire().flatMapMany { resource ->
-        Many.generate { emit -> bracket(resource, release, emit, use(resource)) }
+        Many.generate { emit -> bracket(resource, release, emit) { use(resource) } }
     }
 
 fun <R : Any, T : Any> One.Companion.resource(
@@ -253,7 +260,7 @@ fun <R : Any, T : Any> One.Companion.resource(
     use:     (R) -> One<T>,
 ): One<T> =
     acquire().flatMap { resource ->
-        Many.generate<T> { emit -> bracket(resource, release, emit, use(resource).toMany()) }
+        Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
             .firstMaybe()
             .or { throw IllegalStateException("resource use produced no value") }
     }
@@ -264,7 +271,7 @@ fun <R : Any, T : Any> Maybe.Companion.resource(
     use:     (R) -> Maybe<T>,
 ): Maybe<T> =
     acquire().flatMapMaybe { resource ->
-        Many.generate<T> { emit -> bracket(resource, release, emit, use(resource).toMany()) }
+        Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
             .firstMaybe()
     }
 
@@ -274,5 +281,5 @@ fun <R : Any, T : Any> None.Companion.resource(
     use:     (R) -> None<T>,
 ): None<T> =
     acquire().flatMapMany { resource ->
-        Many.generate<T> { emit -> bracket(resource, release, emit, use(resource).toMany()) }
+        Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
     }.discard()

@@ -51,7 +51,7 @@ class PublishersTest {
         fun `error signals error`() = runTest {
             val cause = InvalidDemandException(-1)
             val result = Many.error<Int>(cause).toList().await()
-            assertIs<Failure<AelvException>>(result)
+            assertIs<Failure<InvalidDemandException>>(result)
             assertEquals(cause, result.value)
         }
 
@@ -123,7 +123,7 @@ class PublishersTest {
         fun `error signals error`() = runTest {
             val cause = InvalidDemandException(-1)
             val result = One.error<Int>(cause).await()
-            assertIs<Failure<AelvException>>(result)
+            assertIs<Failure<InvalidDemandException>>(result)
             assertEquals(cause, result.value)
         }
 
@@ -204,7 +204,7 @@ class PublishersTest {
         fun `error signals error`() = runTest {
             val cause = InvalidDemandException(-1)
             val result = None.error<Unit>(cause).await()
-            assertIs<Failure<AelvException>>(result)
+            assertIs<Failure<InvalidDemandException>>(result)
             assertEquals(cause, result.value)
         }
 

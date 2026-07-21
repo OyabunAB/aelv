@@ -30,9 +30,7 @@ sealed class Either<out A, out B> {
     /** The success outcome, carrying [value] of type [B]. */
     data class Right<out B>(val value: B) : Either<Nothing, B>()
 
-    /** Returns true if this is a [Left]. */
     fun isLeft(): Boolean = this is Left
-    /** Returns true if this is a [Right]. */
     fun isRight(): Boolean = this is Right
     /** Returns true if this is a [Right] — semantic alias for [isRight]. */
     fun isOk(): Boolean = this is Right
@@ -101,6 +99,7 @@ fun <A> A.left(): Either<A, Nothing> = Either.Left(this)
 
 typealias Success<T> = Either.Right<T>
 typealias Failure<E> = Either.Left<E>
+typealias Outcome<T> = Either<Exception, T>
 
 /**
  * Returns the [Right] value, or throws the [Left] value if it is a [Throwable],
@@ -111,20 +110,14 @@ fun <A : Throwable, B> Either<A, B>.rightOrThrow(): B = when (this) {
     is Failure  -> throw value
 }
 
-/** Alias for [rightOrThrow] — matches Kotlin's [Result.getOrThrow] convention. */
-fun <A : Throwable, B> Either<A, B>.getOrThrow(): B = rightOrThrow()
-
 /**
  * Base class for all exceptions thrown or signalled by aelv.
- *
- * Extends [IllegalArgumentException] to satisfy Reactive Streams §3.9, which requires that
- * `request(n <= 0)` results in an `IllegalArgumentException`.
  */
-sealed class AelvException(message: String, cause: Throwable? = null) : IllegalArgumentException(message, cause)
+sealed class AelvException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
-/** Thrown when a subscriber calls `request(n)` with `n <= 0` (RS spec §3.9). */
+/** Thrown when a subscriber calls `request(n)` with `n <= 0` — RS spec §3.9 requires IllegalArgumentException. */
 class InvalidDemandException(n: Long) :
-    AelvException("request must be positive, got $n (RS spec §3.9)")
+    IllegalArgumentException("request must be positive, got $n (RS spec §3.9)")
 
 /** Thrown by terminal operators such as [Many.first] and [One.await] when the stream is empty. */
 class NoSuchElementException :
