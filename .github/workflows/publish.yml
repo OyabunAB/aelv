@@ -51,9 +51,9 @@ jobs:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
 
-      - name: Publish to Maven Central
+      - name: Stage to Sonatype (close and release manually at oss.sonatype.org)
         if: ${{ !contains(steps.version.outputs.version, '-') }}
-        run: ./gradlew publishToSonatype closeAndReleaseSonatypeStagingRepository
+        run: ./gradlew publishToSonatype
         env:
           VERSION: ${{ steps.version.outputs.version }}
           OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
