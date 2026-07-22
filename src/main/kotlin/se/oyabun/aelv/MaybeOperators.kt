@@ -55,7 +55,28 @@ fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
         if (emitComplete) onComplete()
     }
 
+/**
+ * Maps the present value to another [Maybe] and subscribes to it; if this [Maybe] is empty
+ * the result completes empty without invoking [transform].
+ *
+ * If this [Maybe] errors, the error is forwarded without calling [transform].
+ */
 fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): Maybe<R> =
+    Maybe { onNext, onComplete, onError ->
+        source(
+            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            onComplete,
+            onError,
+        )
+    }
+
+/**
+ * Maps the present value to a [One] and subscribes to it; if this [Maybe] is empty
+ * the result completes empty without invoking [transform].
+ *
+ * If this [Maybe] errors, the error is forwarded without calling [transform].
+ */
+fun <T : Any, R : Any> Maybe<T>.flatMapOne(transform: suspend (T) -> One<R>): Maybe<R> =
     Maybe { onNext, onComplete, onError ->
         source(
             { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },

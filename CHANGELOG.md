@@ -2,6 +2,15 @@
 
 ## 1.0.1 — 2026-07-22
 
+### Added
+
+- `Maybe.flatMapOne(transform: suspend (T) -> One<R>): Maybe<R>` — maps the present value through a `One`; completes empty if source is absent
+
+### Changed
+
+- `Many.flatMapOne` removed — violated the `flatMapX: X` convention (returned `Many` instead of `One`); use `concatMap { f(it).toMany() }` directly
+- `One.flatMapOne` removed — was a duplicate of `One.flatMap`
+
 ### Fixed
 
 - `Sink.asMany()` skipped ring buffer items written after `endPos` was snapshotted when `complete()` was called concurrently. After draining a batch (`drained=true`) the terminal check now only fires when the ring buffer is empty, ensuring items written between the `endPos` snapshot and the terminal signal are always delivered. ([#76](https://github.com/OyabunAB/aelv/issues/76))

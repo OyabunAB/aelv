@@ -710,11 +710,4 @@ fun <T : Any> Many<T>.flatMapNone(transform: suspend (T) -> None<T>): None<T> =
  * rather than a [Many].  Each inner [One] is lifted to a [Many] before merging, so ordering is
  * not guaranteed when concurrency > 1.
  */
-fun <T : Any, R : Any> Many<T>.flatMapOne(transform: (T) -> One<R>): Many<R> =
-    flatMap { value: T -> Many.from(transform(value)) }
 
-@LowPriorityInOverloadResolution
-fun <T : Any, R : Any> Many<T>.flatMapOne(transform: suspend (T) -> One<R>): Many<R> {
-    val asManyTransform: suspend (T) -> Many<R> = { value -> Many.from(transform(value)) }
-    return flatMap(transform = asManyTransform)
-}

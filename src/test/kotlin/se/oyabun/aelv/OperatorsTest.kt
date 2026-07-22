@@ -1199,27 +1199,40 @@ class OperatorsTest {
     class FlatMapOne {
 
         @Test
-        fun `flatMapOne maps each item through a One`() {
-            Verify.that(Many.items(1, 2, 3).flatMapOne { One.single(it * 10) })
-                .emitsNext(10, 20, 30)
+        fun `One flatMap chains two Ones`() {
+            Verify.that(One.single(6).flatMap { One.single(it * 7) })
+                .emitsNext(42)
                 .completes()
         }
 
         @Test
-        fun `flatMapOne on empty source emits nothing`() {
-            Verify.that(Many.empty<Int>().flatMapOne { One.single(it) })
-                .completes()
-        }
-
-        @Test
-        fun `flatMapOne propagates error from source`() {
-            Verify.that(Many.error<Int>(InvalidDemandException(-1)).flatMapOne { One.single(it) })
+        fun `One flatMap propagates error from source`() {
+            Verify.that(One.error<Int>(InvalidDemandException(-1)).flatMap { One.single(it) })
                 .failsWith<InvalidDemandException>()
         }
 
         @Test
-        fun `flatMapOne propagates error from inner One`() {
-            Verify.that(Many.items(1).flatMapOne { One.error<Int>(InvalidDemandException(-1)) })
+        fun `One flatMap propagates error from inner One`() {
+            Verify.that(One.single(1).flatMap { One.error<Int>(InvalidDemandException(-1)) })
+                .failsWith<InvalidDemandException>()
+        }
+
+        @Test
+        fun `Maybe flatMapOne maps present value through a One`() {
+            Verify.that(One.single(6).toMaybe().flatMapOne { One.single(it * 7) })
+                .emitsNext(42)
+                .completes()
+        }
+
+        @Test
+        fun `Maybe flatMapOne completes empty when source is empty`() {
+            Verify.that(Maybe.empty<Int>().flatMapOne { One.single(it) })
+                .completes()
+        }
+
+        @Test
+        fun `Maybe flatMapOne propagates error from inner One`() {
+            Verify.that(One.single(1).toMaybe().flatMapOne { One.error<Int>(InvalidDemandException(-1)) })
                 .failsWith<InvalidDemandException>()
         }
     }

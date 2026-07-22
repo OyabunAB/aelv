@@ -41,6 +41,11 @@ fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
         )
     }
 
+/**
+ * Maps the single value to another [One] and subscribes to it, forwarding the result downstream.
+ *
+ * If this [One] errors, the error is forwarded without calling [transform].
+ */
 fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> =
     One.generate { emit ->
         source(
