@@ -15,6 +15,7 @@
  */
 package se.oyabun.aelv
 
+import kotlinx.coroutines.channels.Channel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -131,6 +132,52 @@ class SinksTest {
             Verify.that(sink.asMany()).failsWith<RuntimeException>(within = 1.seconds) {
                 assertEquals("fail", it.message)
             }
+        }
+
+        /**
+         * Regression: asMany() must not skip items that were written to the ring buffer
+         * after the subscriber captured endPos but before it checks terminal.isSet().
+         *
+         * Race window:
+         *   1. subscriber wakes up, snapshots endPos = N+1 (only item 1 visible)
+         *   2. producer writes item 2  (writePos → N+2)
+         *   3. producer calls complete (terminal set)
+         *   4. subscriber drains item 1, checks terminal → set → emits Complete
+         *      item 2 at ring buffer position N+1 is never delivered  ← BUG
+         *
+         * The fix: only check terminal when drained=false (nothing new was read);
+         * when drained=true, loop back unconditionally to re-read writePos first.
+         */
+        @Test fun `does not skip items written to ring buffer between endPos snapshot and terminal check`() {
+            // Gate channels used to pin the subscriber inside generatorEmit(item 1)
+            // while the producer writes item 2 + complete on a concurrent coroutine.
+            val afterItem1 = Channel<Unit>(Channel.RENDEZVOUS)
+            val canContinue = Channel<Unit>(Channel.RENDEZVOUS)
+
+            val sink = Sinks.replay<Int>()
+
+            // Consumer: pauses inside the item-1 callback so the producer can
+            // write item 2 and call complete while generatorEmit(1) is still running.
+            val consumer = sink.asMany().doOnNext { item ->
+                if (item == 1) {
+                    afterItem1.send(Unit)   // signal: I am inside generatorEmit(item 1)
+                    canContinue.receive()  // wait: producer has written item 2 + complete
+                }
+            }
+
+            // Producer: emits 1, waits until the consumer is paused inside generatorEmit(1),
+            // then writes item 2 and completes the sink — exactly the race window.
+            val producer = None.defer<Int> {
+                sink.tryEmit(1)
+                afterItem1.receive()  // consumer is now paused inside generatorEmit(item 1)
+                sink.tryEmit(2)       // writePos advances; item 2 now in ring buffer
+                sink.complete()       // terminal set — this is the dangerous moment
+                canContinue.send(Unit)
+            }.toMany()
+
+            Verify.that(merge(consumer, producer))
+                .emitsNext(1, 2)
+                .completes(within = 2.seconds)
         }
     }
 

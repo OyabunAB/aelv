@@ -216,8 +216,8 @@ sealed class Sink<T : Any>(
                         if (generatorEmit(Signal.Upstream.Next(item)) == Signal.Downstream.Cancel) return@generate
                         drained = true
                     }
-                    if (terminal.isSet()) { generatorEmit(terminal.get() as Signal.Upstream<T>); return@generate }
                     if (!drained) {
+                        if (terminal.isSet()) { generatorEmit(terminal.get() as Signal.Upstream<T>); return@generate }
                         var spins = 0
                         while (handle.cursor >= writePos && !terminal.isSet() && spins++ < 100) {
                             yield()
