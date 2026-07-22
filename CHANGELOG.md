@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 — 2026-07-22
+
+### Fixed
+
+- `Sink.asMany()` skipped ring buffer items written after `endPos` was snapshotted when `complete()` was called concurrently. After draining a batch (`drained=true`) the terminal check now only fires when the ring buffer is empty, ensuring items written between the `endPos` snapshot and the terminal signal are always delivered. ([#76](https://github.com/OyabunAB/aelv/issues/76))
+
+---
+
 ## 1.0.0 — 2026-07-21
 
 ### Added

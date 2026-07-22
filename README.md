@@ -5,7 +5,7 @@ Reactive streams for Kotlin, built on coroutines.
 Requires Kotlin 2.x and JVM 21+.
 
 ```kotlin
-implementation("se.oyabun:aelv:1.0.0")
+implementation("se.oyabun:aelv:1.0.1")
 ```
 
 ---
