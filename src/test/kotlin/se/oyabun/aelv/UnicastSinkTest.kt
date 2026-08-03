@@ -18,6 +18,13 @@ package se.oyabun.aelv
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.delay
+import org.reactivestreams.Publisher
+import org.reactivestreams.Subscriber
+import org.reactivestreams.Subscription
 
 class UnicastSinkTest {
 
@@ -123,5 +130,54 @@ class UnicastSinkTest {
         sink.emit(99)
 
         Verify.that(sink.asMany()).failsWith<RuntimeException> { assertEquals("oops", it.message) }
+    }
+
+    @Test
+    fun `onRequest fires with the requested demand count`() {
+        val demands = Sinks.unicast<Long>()
+        val sink    = Sinks.unicast<Int>().onRequest { n -> demands.emit(n) }
+        sink.emit(1, 2, 3).complete()
+
+        Verify.that(
+            Many.from(sink.asMany() as Publisher<Int>)
+                .doOnComplete { demands.complete() }
+                .discard()
+                .andThen { demands.asMany() },
+        ).assertNext { assertTrue(it > 0L, "demand must be positive, got $it") }
+            .completes(within = 2.seconds)
+    }
+
+    @Test
+    fun `onRequest receives exact n from a raw subscriber`() {
+        val demands = Sinks.unicast<Long>()
+        val sink    = Sinks.unicast<Int>().onRequest { n -> demands.emit(n) }
+        sink.emit(1, 2, 3).complete()
+
+        sink.asMany().subscribe(object : Subscriber<Int> {
+            override fun onSubscribe(s: Subscription) { s.request(2) }
+            override fun onNext(value: Int) = Unit
+            override fun onError(t: Throwable) = Unit
+            override fun onComplete() = Unit
+        })
+
+        Verify.that(
+            None.defer<Unit> { delay(100.milliseconds); demands.complete() }
+                .andThen { demands.asMany() },
+        ).emitsNext(2L).completes(within = 2.seconds)
+    }
+
+    @Test
+    fun `onRequest propagates through operator chains`() {
+        val demands = Sinks.unicast<Long>()
+        val sink    = Sinks.unicast<Int>().onRequest { n -> demands.emit(n) }
+        sink.emit(1, 2, 3).complete()
+
+        Verify.that(
+            Many.from(sink.asMany().map { it * 2 } as Publisher<Int>)
+                .doOnComplete { demands.complete() }
+                .discard()
+                .andThen { demands.asMany() },
+        ).assertNext { assertTrue(it > 0L, "demand must be positive, got $it") }
+            .completes(within = 2.seconds)
     }
 }

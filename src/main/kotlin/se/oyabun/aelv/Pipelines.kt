@@ -57,7 +57,7 @@ fun <T : Any, R : Any> Many<T>.andThen(next: Many<R>): Many<R> {
         if (pipelineFusion is Fusion.Available && sourceFusion is Fusion.Available) pipelineFusion.connectSource(sourceFusion)
         else Fusion.None
     val left = this
-    return Many.fused(connectedFusion) { onNext, onComplete, onError ->
+    return Many.fused(connectedFusion) { onNext, onComplete, onError, onRequest ->
         // Capture the coroutine context that exists *before* we inject the new source slot.
         // This context contains the real upstream source slot (set by applyTo or an outer then)
         // and is what left's own pipelineFrom will need to resolve its source.
@@ -65,13 +65,13 @@ fun <T : Any, R : Any> Many<T>.andThen(next: Many<R>): Many<R> {
         // Wrap left so that when next's pipelineFrom drives it, left runs in the outer context
         // (where its own source slot is correctly set) rather than the inner context (where
         // the slot has been overwritten to point at left itself — which would be circular).
-        val leftDriven = Many.fused<T> { innerOnNext, innerOnComplete, innerOnError ->
+        val leftDriven = Many.fused<T> { innerOnNext, innerOnComplete, innerOnError, innerOnRequest ->
             withContext(outerCtx) {
-                left.source(innerOnNext, innerOnComplete, innerOnError)
+                left.source(innerOnNext, innerOnComplete, innerOnError, innerOnRequest)
             }
         }
         withContext(outerCtx + SourceSlot(leftDriven)) {
-            next.source(onNext, onComplete, onError)
+            next.source(onNext, onComplete, onError, onRequest)
         }
     }
 }
@@ -87,16 +87,17 @@ fun <T : Any, R : Any> Many<T>.andThen(next: Many<R>): Many<R> {
  */
 fun <T : Any, R : Any> Many<T>.andThen(next: One<R>): One<R> {
     val left = this
-    return One.generate { emit ->
+    return One.generate { emit, onRequest ->
         val outerCtx = currentCoroutineContext()
-        val leftDriven = Many.fused<T> { innerOnNext, innerOnComplete, innerOnError ->
-            withContext(outerCtx) { left.source(innerOnNext, innerOnComplete, innerOnError) }
+        val leftDriven = Many.fused<T> { innerOnNext, innerOnComplete, innerOnError, innerOnRequest ->
+            withContext(outerCtx) { left.source(innerOnNext, innerOnComplete, innerOnError, innerOnRequest) }
         }
         withContext(outerCtx + SourceSlot(leftDriven)) {
             next.source(
                 { v -> emit(Signal.Upstream.Next(v)) },
                 { emit(Signal.Upstream.Complete) },
                 { issue -> emit(Signal.Upstream.Error(issue)) },
+                onRequest,
             )
         }
     }
@@ -106,8 +107,8 @@ fun <T : Any, R : Any> Many<T>.andThen(next: None<R>): None<R> {
     val left = this
     return None.generate {
         val outerCtx = currentCoroutineContext()
-        val leftDriven = Many.fused<T> { innerOnNext, innerOnComplete, innerOnError ->
-            withContext(outerCtx) { left.source(innerOnNext, innerOnComplete, innerOnError) }
+        val leftDriven = Many.fused<T> { innerOnNext, innerOnComplete, innerOnError, innerOnRequest ->
+            withContext(outerCtx) { left.source(innerOnNext, innerOnComplete, innerOnError, innerOnRequest) }
         }
         withContext(outerCtx + SourceSlot(leftDriven)) {
             val result = next.await()
@@ -123,14 +124,15 @@ fun <T : Any, R : Any> Many<T>.andThen(next: None<R>): None<R> {
  */
 fun <T : Any, R : Any> One<T>.andThen(next: One<R>): One<R> {
     val left = this
-    return One.generate { emit ->
+    return One.generate { emit, onRequest ->
         val outerCtx = currentCoroutineContext()
-        val leftDriven = One.generate<T> { innerEmit ->
+        val leftDriven = One.generate<T> { innerEmit, innerOnRequest ->
             withContext(outerCtx) {
                 left.source(
                     { v -> innerEmit(Signal.Upstream.Next(v)) },
                     { innerEmit(Signal.Upstream.Complete) },
                     { issue -> innerEmit(Signal.Upstream.Error(issue)) },
+                    innerOnRequest,
                 )
             }
         }
@@ -139,6 +141,7 @@ fun <T : Any, R : Any> One<T>.andThen(next: One<R>): One<R> {
                 { v -> emit(Signal.Upstream.Next(v)) },
                 { emit(Signal.Upstream.Complete) },
                 { issue -> emit(Signal.Upstream.Error(issue)) },
+                onRequest,
             )
         }
     }

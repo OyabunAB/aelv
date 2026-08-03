@@ -52,11 +52,12 @@ fun <T : Any, R : Any> Many<T>.map(transform: (T) -> R): Many<R> {
 
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.map(transform: suspend (T) -> R): Many<R> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         source(
             { value -> onNext(transform(value)) },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -65,11 +66,12 @@ fun <T : Any, R : Any> Many<T>.map(transform: suspend (T) -> R): Many<R> =
  * Null results are silently dropped and demand is replenished from upstream.
  */
 fun <T : Any, R : Any> Many<T>.mapNotNull(transform: suspend (T) -> R?): Many<R> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         source(
             { value -> val result = transform(value); if (result != null) onNext(result) else Signal.Downstream.Request },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -80,11 +82,12 @@ fun <T : Any> Many<T>.filter(predicate: (T) -> Boolean): Many<T> {
 
 @LowPriorityInOverloadResolution
 fun <T : Any> Many<T>.filter(predicate: suspend (T) -> Boolean): Many<T> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         source(
             { value -> if (predicate(value)) onNext(value) else Signal.Downstream.Request },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -96,7 +99,7 @@ fun <T : Any> Many<T>.take(n: Long): Many<T> {
 }
 
 fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         var predicateFailed = false
         source(
             { value ->
@@ -105,6 +108,7 @@ fun <T : Any> Many<T>.takeWhile(predicate: (T) -> Boolean): Many<T> =
             },
             onComplete,
             onError,
+            onRequest,
         )
         if (predicateFailed) onComplete()
     }
@@ -116,7 +120,7 @@ fun <T : Any> Many<T>.skip(n: Long): Many<T> {
 }
 
 fun <T : Any> Many<T>.skipWhile(predicate: (T) -> Boolean): Many<T> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         var skipping = true
         source(
             { value ->
@@ -125,13 +129,14 @@ fun <T : Any> Many<T>.skipWhile(predicate: (T) -> Boolean): Many<T> =
             },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
 fun <T : Any> Many<T>.distinct(): Many<T> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         val seen = HashSet<T>()
-        source({ value -> if (seen.add(value)) onNext(value) else Signal.Downstream.Request }, onComplete, onError)
+        source({ value -> if (seen.add(value)) onNext(value) else Signal.Downstream.Request }, onComplete, onError, onRequest)
     }
 
 /**
@@ -148,7 +153,7 @@ fun <T : Any> Many<T>.distinct(): Many<T> =
  * ```
  */
 fun <T : Any, S : Any> Many<T>.scan(initial: S, accumulate: (S, T) -> S): Many<S> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         var state = initial
         source(
             { value ->
@@ -157,22 +162,24 @@ fun <T : Any, S : Any> Many<T>.scan(initial: S, accumulate: (S, T) -> S): Many<S
             },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
 /** Suppresses consecutive duplicate items; non-adjacent duplicates are still emitted. */
 fun <T : Any> Many<T>.distinctUntilChanged(): Many<T> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         var last: Any = Unset
         source(
             { value -> if (value != last) { last = value; onNext(value) } else Signal.Downstream.Request },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
 fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
-    Many.fused { onNext, onComplete, onError ->
+    Many.fused { onNext, onComplete, onError, onRequest ->
         var lastKey: Any = Unset
         source(
             { value ->
@@ -181,6 +188,7 @@ fun <T : Any, K : Any> Many<T>.distinctUntilChangedBy(key: (T) -> K): Many<T> =
             },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -202,7 +210,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
 fun <T : Any, R : Any> Many<T>.flatMap(
     concurrency: Int = 256,
     transform: suspend (T) -> Many<R>,
-): Many<R> = Many.generate { emit ->
+): Many<R> = Many.generate { emit, onRequest ->
     val semaphore  = Semaphore(concurrency)
     val queue      = java.util.concurrent.ConcurrentLinkedQueue<R>()
     val wip        = java.util.concurrent.atomic.AtomicInteger(0)
@@ -237,6 +245,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
                             },
                             { },
                             { issue -> outerError.compareAndSet(Unset, issue) },
+                            onRequest,
                         )
                     } finally {
                         semaphore.release()
@@ -246,6 +255,7 @@ fun <T : Any, R : Any> Many<T>.flatMap(
             },
             { },
             { issue -> outerError.compareAndSet(Unset, issue) },
+            onRequest,
         )
     }
     when {
@@ -261,7 +271,7 @@ fun <T : Any, R : Any> Many<T>.concatMap(transform: (T) -> Many<R>): Many<R> =
 
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.concatMap(transform: suspend (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         var cancelled = false
         source(
             { value ->
@@ -274,11 +284,13 @@ fun <T : Any, R : Any> Many<T>.concatMap(transform: suspend (T) -> Many<R>): Man
                     },
                     {},
                     { issue -> emit(Signal.Upstream.Error(issue)); cancelled = true },
+                    onRequest,
                 )
                 if (cancelled) Signal.Downstream.Cancel else Signal.Downstream.Request
             },
             { if (!cancelled) emit(Signal.Upstream.Complete) },
             { issue -> if (!cancelled) emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -295,7 +307,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
 ): Many<R> {
     require(maxConcurrency > 0) { "maxConcurrency must be positive, got $maxConcurrency" }
     if (maxConcurrency == 1) return concatMap(transform)
-    return Many.generate { emit ->
+    return Many.generate { emit, onRequest ->
         val semaphore = Semaphore(maxConcurrency)
         val orderChannel = Channel<Channel<Signal.Upstream<R>>>(maxConcurrency)
         coroutineScope {
@@ -311,6 +323,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                                     { inner -> innerChannel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                     { innerChannel.close() },
                                     { issue -> innerChannel.close(issue) },
+                                    onRequest,
                                 )
                             }
                         }
@@ -318,6 +331,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
                     },
                     { },
                     { issue -> outerError = issue },
+                    onRequest,
                 )
                 val sentinel = Channel<Signal.Upstream<R>>(0)
                 if (outerError.isError()) sentinel.close(outerError.asError()) else sentinel.close()
@@ -353,7 +367,7 @@ fun <T : Any, R : Any> Many<T>.flatMapSequential(
  * and subscribes to the latest inner [Many].  Only the most recent inner stream is active at any time.
  */
 fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         val channel = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
         coroutineScope {
             val producerJob = launch {
@@ -366,6 +380,7 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
                                 { inner -> channel.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { },
                                 { issue -> channel.send(Signal.Upstream.Error(issue)) },
+                                onRequest,
                             )
                         }
                         Signal.Downstream.Request
@@ -378,6 +393,7 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
                         activeJob.cancelAndJoin()
                         channel.send(Signal.Upstream.Error(issue))
                     },
+                    onRequest,
                 )
                 channel.close()
             }
@@ -396,7 +412,7 @@ fun <T : Any, R : Any> Many<T>.switchMap(transform: (T) -> Many<R>): Many<R> =
  * at which point the subscription to this source is cancelled and the stream completes.
  */
 fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         val channel = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
         coroutineScope {
             val controlJob = launch {
@@ -404,6 +420,7 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
                     { channel.send(Signal.Upstream.Complete); Signal.Downstream.Cancel },
                     { channel.send(Signal.Upstream.Complete) },
                     { channel.send(Signal.Upstream.Complete) },
+                    onRequest,
                 )
             }
             val producerJob = launch {
@@ -411,6 +428,7 @@ fun <T : Any> Many<T>.takeUntilOther(other: Publisher<*>): Many<T> =
                     { value -> channel.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { channel.send(Signal.Upstream.Complete) },
                     { issue -> channel.send(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
                 channel.close()
             }
@@ -432,7 +450,7 @@ fun <T : Any> Many<T>.mergeWith(other: Many<T>): Many<T> = merge(this, other)
  */
 fun <T : Any> Many<T>.buffer(size: Int): Many<List<T>> {
     require(size > 0) { "buffer size must be positive, got $size" }
-    return Many.generate { emit ->
+    return Many.generate { emit, onRequest ->
         val bucket = mutableListOf<T>()
         source(
             { value ->
@@ -451,6 +469,7 @@ fun <T : Any> Many<T>.buffer(size: Int): Many<List<T>> {
                 emit(Signal.Upstream.Complete)
             },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 }
@@ -464,7 +483,7 @@ fun <T : Any> Many<T>.buffer(size: Int): Many<List<T>> {
 fun <T : Any> Many<T>.buffer(size: Int, skip: Int): Many<List<T>> {
     require(size > 0) { "buffer size must be positive, got $size" }
     require(skip > 0) { "buffer skip must be positive, got $skip" }
-    return Many.generate { emit ->
+    return Many.generate { emit, onRequest ->
         val buffers = ArrayDeque<MutableList<T>>()
         var index = 0L
         source(
@@ -490,6 +509,7 @@ fun <T : Any> Many<T>.buffer(size: Int, skip: Int): Many<List<T>> {
                 emit(Signal.Upstream.Complete)
             },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 }
@@ -502,7 +522,7 @@ fun <T : Any> Many<T>.buffer(size: Int, skip: Int): Many<List<T>> {
 fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>> {
     require(size > 0) { "buffer size must be positive, got $size" }
     require(timeout.isPositive()) { "timeout must be positive, got $timeout" }
-    return Many.generate { emit ->
+    return Many.generate { emit, onRequest ->
         // Merged event channel: SourceSignal = upstream item/terminal, TimerFlush = timeout sentinel.
         val events = Channel<BufferEvent<T>>(Channel.BUFFERED)
         coroutineScope {
@@ -518,6 +538,7 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
                     { issue ->
                         events.send(BufferEvent.SourceSignal(Signal.Upstream.Error(issue)))
                     },
+                    onRequest,
                 )
                 events.close()
             }
@@ -584,7 +605,7 @@ fun <T : Any> Many<T>.bufferTimeout(size: Int, timeout: Duration): Many<List<T>>
 fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
     keySelector: (T) -> K,
     groupHandler: (key: K, group: Many<T>) -> Many<R>,
-): Many<R> = Many.generate { emit ->
+): Many<R> = Many.generate { emit, onRequest ->
     val groupChannels = mutableMapOf<K, Channel<Signal.Upstream<T>>>()
     val output = Channel<Signal.Upstream<R>>(Channel.BUFFERED)
     val remaining     = AtomicInteger(0)
@@ -597,7 +618,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                         val newGroupInbox = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
                         remaining.incrementAndGet()
                         launch(start = CoroutineStart.UNDISPATCHED) {
-                            val groupMany = Many.generate<T> { groupEmit ->
+                            val groupMany = Many.generate<T> { groupEmit, _ ->
                                 for (upstream in newGroupInbox) {
                                     if (groupEmit(upstream) == Signal.Downstream.Cancel) {
                                         newGroupInbox.cancel(); break
@@ -608,6 +629,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                                 { inner -> output.send(Signal.Upstream.Next(inner)); Signal.Downstream.Request },
                                 { },
                                 { issue -> output.send(Signal.Upstream.Error(issue)) },
+                                onRequest,
                             )
                             if (remaining.decrementAndGet() == 0) output.close()
                         }
@@ -624,6 +646,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
                     for ((_, groupInbox) in groupChannels) runCatching { groupInbox.send(Signal.Upstream.Error(issue)) }
                     if (remaining.get() == 0) output.close()
                 },
+                onRequest,
             )
         }
         var terminated = false
@@ -647,7 +670,7 @@ fun <T : Any, K : Any, R : Any> Many<T>.groupBy(
  * only the latest values matter.
  */
 fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         val channel = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
         coroutineScope {
             val producerJob = launch {
@@ -663,6 +686,7 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
                     { issue ->
                         channel.send(Signal.Upstream.Error(issue))  // must not lose Error
                     },
+                    onRequest,
                 )
                 channel.close()
             }
@@ -681,7 +705,7 @@ fun <T : Any> Many<T>.onBackpressureDrop(): Many<T> =
  * On normal completion, [fallback] is not invoked.
  */
 fun <T : Any> Many<T>.recoverWith(fallback: (Exception) -> T): Many<T> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         val result = collect { emit(Signal.Upstream.Next(it)) }
         when (result) {
             is Success  -> emit(Signal.Upstream.Complete)

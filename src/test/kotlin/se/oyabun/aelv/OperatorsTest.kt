@@ -160,7 +160,7 @@ class OperatorsTest {
 
         @Test
         fun `concatMap preserves order when all items arrive from upstream at once`() {
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 listOf(1, 2, 3).forEach { emit(Signal.Upstream.Next(it)) }
                 emit(Signal.Upstream.Complete)
             }.concatMap { Many.items(it, it * 10) })
@@ -221,7 +221,7 @@ class OperatorsTest {
         @Test
         fun `zip does not hang when source A errors after source B completes`() {
             val cause   = InvalidDemandException(-1)
-            val sourceA = Many.generate<Int> { emit ->
+            val sourceA = Many.generate<Int> { emit, _ ->
                 emit(Signal.Upstream.Next(1))
                 emit(Signal.Upstream.Next(2))
                 emit(Signal.Upstream.Error(cause))
@@ -271,7 +271,7 @@ class OperatorsTest {
         @Test
         fun `retry retries on error up to n times`() = runTest {
             var attempts = 0
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
@@ -293,7 +293,7 @@ class OperatorsTest {
         @Test
         fun `retry with Retry max succeeds after failures`() = runTest {
             var attempts = 0
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
@@ -315,7 +315,7 @@ class OperatorsTest {
         @Test
         fun `retry with fixed backoff delays between attempts`() = runTest {
             var attempts = 0
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
@@ -329,7 +329,7 @@ class OperatorsTest {
         @Test
         fun `retry with exponential backoff succeeds after failures`() = runTest {
             var attempts = 0
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 attempts++
                 if (attempts < 3) throw InvalidDemandException(-1)
                 emit(Signal.Upstream.Next(42))
@@ -351,7 +351,7 @@ class OperatorsTest {
         @Test
         fun `retry zero does not retry`() = runTest {
             var attempts = 0
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 attempts++
                 throw InvalidDemandException(-1)
             }.retry(Policy.retry().maxAttempts(0)))
@@ -525,7 +525,7 @@ class OperatorsTest {
         fun `each group receives an Error terminal when source errors`() = runTest {
             val cause  = InvalidDemandException(-1)
             val errors = mutableMapOf<String, Exception>()
-            Verify.that(Many.generate<String> { emit ->
+            Verify.that(Many.generate<String> { emit, _ ->
                 emit(Signal.Upstream.Next("x"))
                 emit(Signal.Upstream.Next("y"))
                 emit(Signal.Upstream.Error(cause))
@@ -582,7 +582,7 @@ class OperatorsTest {
             // Regression: group onError was fired after the outer stream errored, not before.
             val cause         = InvalidDemandException(-1)
             val erroredGroups = mutableSetOf<Int>()
-            Verify.that(Many.generate<Int> { emit ->
+            Verify.that(Many.generate<Int> { emit, _ ->
                 emit(Signal.Upstream.Next(1))
                 emit(Signal.Upstream.Next(2))
                 emit(Signal.Upstream.Next(3))
@@ -891,7 +891,7 @@ class OperatorsTest {
         @Test
         fun `zip completes empty when first source is empty`() = runTest {
             val empty  = One.defer<Int> { throw NoElementException() }.recover { One.single(0) }
-                .flatMap { One.generate<Int> { emit -> emit(Signal.Upstream.Complete) } }
+                .flatMap { One.generate<Int> { emit, _ -> emit(Signal.Upstream.Complete) } }
             val other  = One.single("a")
             val result = zip(empty, other) { n, s -> "$n$s" }.await()
             assertIs<Failure<AelvException>>(result)

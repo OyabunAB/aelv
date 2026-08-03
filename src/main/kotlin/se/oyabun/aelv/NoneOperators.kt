@@ -33,13 +33,14 @@ import org.reactivestreams.Publisher
  */
 @OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> One<R>): One<R> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         val result = await()
         if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
         producer().source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -49,10 +50,10 @@ fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> One<R>): One<R> =
  */
 @OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> Maybe<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
+    Maybe { onNext, onComplete, onError, onRequest ->
         val result = await()
         if (result is Failure) { onError(result.value); return@Maybe }
-        producer().source(onNext, onComplete, onError)
+        producer().source(onNext, onComplete, onError, onRequest)
     }
 
 /**
@@ -62,13 +63,14 @@ fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> Maybe<R>): Maybe<
  */
 @OverloadResolutionByLambdaReturnType
 fun <T : Any, R : Any> None<T>.andThen(producer: suspend () -> Many<R>): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         val result = await()
         if (result is Failure) { emit(Signal.Upstream.Error(result.value)); return@generate }
         producer().source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 

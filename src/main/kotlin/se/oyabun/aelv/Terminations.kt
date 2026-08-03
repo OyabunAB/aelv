@@ -114,7 +114,7 @@ fun <T : Any> Many<T>.drain(
  * Returns a [One] that emits the final accumulated value.
  */
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         val fused = collectInto(initial, accumulate)
         val result = fused ?: run {
             var accumulator = initial
@@ -129,7 +129,7 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: (R, T) -> R): One<R>
 
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: suspend (R, T) -> R): One<R> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         var accumulator = initial
         val result = collect { value -> accumulator = accumulate(accumulator, value); Signal.Downstream.Request }
         when (result) {
@@ -145,7 +145,7 @@ fun <T : Any, R : Any> Many<T>.fold(initial: R, accumulate: suspend (R, T) -> R)
  * stream was empty, or propagates the upstream error if the stream errored.
  */
 fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         var accumulator: Either<Unset, T> = Unset.left()
         val result = collect { item ->
             accumulator = when (val current = accumulator) {
@@ -165,7 +165,7 @@ fun <T : Any> Many<T>.reduce(accumulate: (T, T) -> T): One<T> =
     }
 
 fun <T : Any> Many<T>.toList(): One<List<T>> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         val fused = collectInto(mutableListOf<T>()) { accumulator, item -> accumulator.also { it.add(item) } }
         val outcome = fused ?: run {
             val result = mutableListOf<T>()
@@ -179,7 +179,7 @@ fun <T : Any> Many<T>.toList(): One<List<T>> =
 
 /** Collects all items into an immutable [Set], removing duplicates. */
 fun <T : Any> Many<T>.toSet(): One<Set<T>> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         val fused = collectInto(mutableSetOf<T>()) { accumulator, item -> accumulator.also { it.add(item) } }
         val outcome = fused ?: run {
             val result = mutableSetOf<T>()
@@ -200,7 +200,7 @@ fun <T : Any> Many<T>.toSet(): One<Set<T>> =
 fun <T : Any> Many<T>.first(): One<T> {
     val currentFusion = fusion
     return One.fromStep(
-        step = Step.Suspend { onNext, onComplete, onError ->
+        step = Step.Suspend { onNext, onComplete, onError, _ ->
             var result: Either<Unset, T> = Unset.left()
             val outcome = collect { value -> result = value.right(); Signal.Downstream.Cancel }
             val final = result
@@ -215,7 +215,7 @@ fun <T : Any> Many<T>.first(): One<T> {
 }
 
 fun <T : Any> Many<T>.last(): One<T> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         var result: Either<Unset, T> = Unset.left()
         val outcome = collect { value -> result = value.right(); Signal.Downstream.Request }
         val final = result

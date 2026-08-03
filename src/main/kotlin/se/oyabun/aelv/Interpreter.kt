@@ -38,6 +38,7 @@ internal sealed class Step<out T : Any> {
             onNext:     OnNext<T>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit,
     ) : Step<T>()
 
@@ -79,6 +80,7 @@ internal suspend fun applyFrame(
     item: Any,
     frame: Frame<Any>,
     todo: ArrayDeque<Work<*>>,
+    onRequest: Demand,
 ): Signal.Downstream {
     var current = item
     var currentFrame: Frame<Any> = frame
@@ -102,7 +104,7 @@ internal suspend fun applyFrame(
             node as Frame.Take<Any>
             if (node.remaining <= 0L) return Signal.Downstream.Cancel
             // Emit first, then decrement: remaining=1 means this item is the last one.
-            val downstream = applyFrame(current, node.next, todo)
+            val downstream = applyFrame(current, node.next, todo, onRequest)
             node.remaining--
             return if (node.remaining == 0L) Signal.Downstream.Cancel else downstream
         }
@@ -126,6 +128,7 @@ internal suspend fun applyFrame(
 internal suspend fun <T : Any> interpret(
     step: Step<T>,
     frame: Frame<T>,
+    onRequest: Demand,
 ): Either<Exception, Boolean> {
     val todo = ArrayDeque<Work<*>>()
     todo.addLast(Work(RunSource.Pending(step), frame))
@@ -135,11 +138,11 @@ internal suspend fun <T : Any> interpret(
             val work = todo.first() as Work<Any>
 
             when (val runSource = work.source) {
-                is RunSource.Pending<*> -> { runSource as RunSource.Pending<Any>; resolve(runSource.step, work, todo) }
+                is RunSource.Pending<*> -> { runSource as RunSource.Pending<Any>; resolve(runSource.step, work, todo, onRequest) }
 
                 is RunSource.Range -> {
                     if (!runSource.hasNext()) { todo.removeFirst(); continue }
-                    if (applyFrame(runSource.next(), work.frame, todo) == Signal.Downstream.Cancel) {
+                    if (applyFrame(runSource.next(), work.frame, todo, onRequest) == Signal.Downstream.Cancel) {
                         todo.clear(); return false.right()
                     }
                 }
@@ -147,7 +150,7 @@ internal suspend fun <T : Any> interpret(
                 is RunSource.Items<*> -> {
                     runSource as RunSource.Items<Any>
                     if (!runSource.hasNext()) { todo.removeFirst(); continue }
-                    if (applyFrame(runSource.next(), work.frame, todo) == Signal.Downstream.Cancel) {
+                    if (applyFrame(runSource.next(), work.frame, todo, onRequest) == Signal.Downstream.Cancel) {
                         todo.clear(); return false.right()
                     }
                 }
@@ -155,7 +158,7 @@ internal suspend fun <T : Any> interpret(
                 is RunSource.Iter<*> -> {
                     runSource as RunSource.Iter<Any>
                     if (!runSource.iter.hasNext()) { todo.removeFirst(); continue }
-                    if (applyFrame(runSource.iter.next(), work.frame, todo) == Signal.Downstream.Cancel) {
+                    if (applyFrame(runSource.iter.next(), work.frame, todo, onRequest) == Signal.Downstream.Cancel) {
                         todo.clear(); return false.right()
                     }
                 }
@@ -170,6 +173,7 @@ private suspend fun resolve(
     rawStep: Step<Any>,
     work: Work<Any>,
     todo: ArrayDeque<Work<*>>,
+    onRequest: Demand,
 ) {
     var currentStep: Step<Any>   = rawStep
     var currentFrame: Frame<Any> = work.frame
@@ -190,21 +194,21 @@ private suspend fun resolve(
 
         is Step.Defer<*> -> {
             val obs = step.factory()
-            val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe -> (obs as Observable<Any, *>).source(on, oc, oe) }
+            val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe, req -> (obs as Observable<Any, *>).source(on, oc, oe, req) }
             todo[0] = Work(RunSource.Pending(nextStep as Step<Any>), currentFrame)
             return
         }
         is Step.PipelineSource<*> -> {
             val obs = currentCoroutineContext()[SourceSlot]?.publisher as? Observable<*, *>
                 ?: error("pipelineFrom() executed without a bound source — use applyTo() or then()")
-            val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe -> (obs as Observable<Any, *>).source(on, oc, oe) }
+            val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe, req -> (obs as Observable<Any, *>).source(on, oc, oe, req) }
             todo[0] = Work(RunSource.Pending(nextStep as Step<Any>), currentFrame)
             return
         }
 
         is Step.Suspend<*>, is Step.FlatMap<*, *>, is Step.FromFlow<*>, is Step.FromPublisher<*> -> {
             todo.removeFirst()
-            execSuspend(step, currentFrame, todo)
+            execSuspend(step, currentFrame, todo, onRequest)
             return
         }
     }
@@ -215,28 +219,30 @@ private suspend fun execSuspend(
     step: Step<Any>,
     frame: Frame<Any>,
     todo: ArrayDeque<Work<*>>,
+    onRequest: Demand,
 ) {
     val block: suspend (
         onNext: OnNext<Any>,
         onComplete: OnComplete,
         onError: OnError,
+        onRequest: Demand,
     ) -> Unit = when (step) {
         is Step.Suspend<*>       -> (step as Step.Suspend<Any>).block
         is Step.FromFlow<*>      -> {
             val flow = (step as Step.FromFlow<Any>).flow
-            { onNext, onComplete, _ ->
+            { onNext, onComplete, _, _ ->
                 flow.collectCancelling { onNext(it) != Signal.Downstream.Cancel }
                 onComplete()
             }
         }
         is Step.FromPublisher<*> -> {
             val publisher = (step as Step.FromPublisher<Any>).publisher
-            { onNext, onComplete, _ ->
+            { onNext, onComplete, _, _ ->
                 publisher.asFlow().collectCancelling { onNext(it) != Signal.Downstream.Cancel }
                 onComplete()
             }
         }
-        is Step.Never            -> { _, _, _ -> awaitCancellation() }
+        is Step.Never            -> { _, _, _, _ -> awaitCancellation() }
         is Step.FlatMap<*, *>    -> {
             step as Step.FlatMap<Any, Any>
             Many.concurrentFlatMapSuspend(step.upstream, step.concurrency, step.transform)
@@ -255,16 +261,17 @@ private suspend fun execSuspend(
                 }
                 is Frame.ConcatBind<*, *> -> {
                     node as Frame.ConcatBind<Any, Any>
-                    when (val result = interpret(node.transform(item).step, node.next)) {
+                    when (val result = interpret(node.transform(item).step, node.next, onRequest)) {
                         is Either.Right -> if (result.value) Signal.Downstream.Request else Signal.Downstream.Cancel
                         is Either.Left  -> throw result.value
                     }
                 }
-                else -> applyFrame(item, frame, todo)
+                else -> applyFrame(item, frame, todo, onRequest)
             }
             sig
         },
         {},
         { exception -> throw exception },
+        onRequest,
     )
 }

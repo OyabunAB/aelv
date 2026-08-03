@@ -117,10 +117,8 @@ interface SinkOf<T : Any, Self : SinkOf<T, Self>> {
  * - [onCancel] — a subscriber disconnected (cancelled or stream terminated for that subscriber).
  * - [doOnOverflow] — an emitted item was dropped due to the configured [OverflowStrategy].
  * - [doOnTerminate] — the sink itself completed or errored.
- *
- * **Note**: `onRequest(n: Long)` — demand signalling from subscriber to producer — is not
- * yet available on queue-backed sinks. It requires explicit demand tracking in the generation
- * model and will be added in a future release.
+ * - [onRequest] — the subscriber requested `n` items from this sink's [asMany] stream; demand
+ *   is threaded from the subscription through the operator chain to the sink producer.
  *
  * ## Thread safety
  *
@@ -149,6 +147,7 @@ sealed class Sink<T : Any>(
         val onCancel:      OnCancel      = {},
         val doOnOverflow:  OnOverflow<T> = {},
         val doOnTerminate: OnTerminate   = {},
+        val onRequest:   OnRequest     = {},
     )
 
     private val hooks = AtomicReference(Hooks<T>())
@@ -171,6 +170,13 @@ sealed class Sink<T : Any>(
     /** Registers a callback invoked when this sink completes or errors. */
     fun doOnTerminate(callback: () -> Unit): Sink<T> =
         apply { hooks.updateAndGet { it.copy(doOnTerminate = callback) } }
+
+    /**
+     * Registers a callback invoked with the requested count each time a subscriber requests
+     * items from this sink's [asMany] stream (subscriber → producer demand signalling).
+     */
+    fun onRequest(callback: OnRequest): Sink<T> =
+        apply { hooks.updateAndGet { it.copy(onRequest = callback) } }
 
     protected fun doEmit(value: T) {
         if (terminal.isSet()) return
@@ -271,7 +277,8 @@ sealed class Sink<T : Any>(
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun asMany(): Many<T> = Many.generate { generatorEmit ->
+    fun asMany(): Many<T> = Many.generate { generatorEmit, onRequest ->
+        onRequest.observe { n -> hooks.get().onRequest(n) }
         val (handle, snapshot) = register()
         try {
             for (item in snapshot) {
@@ -392,15 +399,14 @@ object Sinks {
  * - [onCancel] — subscriber disconnected (cancel or stream termination).
  * - [doOnOverflow] — item dropped due to [overflow] strategy; use to release ref-counted resources.
  * - [doOnTerminate] — the sink completed or errored.
+ * - [onRequest] — the subscriber requested `n` items from this sink's [asMany] stream; demand
+ *   is threaded from the subscription through the operator chain to the sink producer.
  *
  * ## Overflow
  *
  * Pass an [OverflowStrategy] other than [OverflowStrategy.Unbounded] to bound the internal queue.
  * [OverflowStrategy.Unbounded] (default) uses an unbounded [ConcurrentLinkedQueue].
  * Any other strategy uses a bounded queue of size [maxBuffered].
- *
- * **Note**: `onRequest` is not yet available. It requires explicit demand tracking
- * in the generation model (tracked in issue #78).
  */
 class UnicastSink<T : Any>(
     private val overflow:    OverflowStrategy = OverflowStrategy.Unbounded,
@@ -417,6 +423,7 @@ class UnicastSink<T : Any>(
         val onCancel:      OnCancel      = {},
         val doOnOverflow:  OnOverflow<T> = {},
         val doOnTerminate: OnTerminate   = {},
+        val onRequest:   OnRequest     = {},
     )
 
     private val hooks = AtomicReference(Hooks<T>())
@@ -439,6 +446,13 @@ class UnicastSink<T : Any>(
     /** Registers a callback invoked when this sink completes or errors. */
     fun doOnTerminate(callback: () -> Unit): UnicastSink<T> =
         apply { hooks.updateAndGet { it.copy(doOnTerminate = callback) } }
+
+    /**
+     * Registers a callback invoked with the requested count each time the subscriber requests
+     * items from this sink's [asMany] stream (subscriber → producer demand signalling).
+     */
+    fun onRequest(callback: OnRequest): UnicastSink<T> =
+        apply { hooks.updateAndGet { it.copy(onRequest = callback) } }
 
     override fun emit(value: T): UnicastSink<T> {
         enqueue(value)
@@ -488,7 +502,8 @@ class UnicastSink<T : Any>(
         return this
     }
 
-    fun asMany(): Many<T> = Many.generate { downstream ->
+    fun asMany(): Many<T> = Many.generate { downstream, onRequest ->
+        onRequest.observe { n -> hooks.get().onRequest(n) }
         if (!subscribed.compareAndSet(false, true)) {
             downstream(Signal.Upstream.Error(IllegalStateException("UnicastSink already has a subscriber")))
             return@generate
@@ -513,11 +528,12 @@ class UnicastSink<T : Any>(
         }
     }
 
-    fun asOne(): One<T> = One.generate { downstream ->
+    fun asOne(): One<T> = One.generate { downstream, onRequest ->
         asMany().take(1).source(
             { value -> downstream(Signal.Upstream.Next(value)) },
             { downstream(Signal.Upstream.Complete) },
             { cause -> downstream(Signal.Upstream.Error(cause)) },
+            onRequest,
         )
     }
 }

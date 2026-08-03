@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `onRequest(callback: suspend (Long) -> Unit)` on all sink types — producer-side demand hook that fires with the exact `n` from the subscriber's `request(n)`. Demand is threaded through the subscription and every operator chain to the sink producer, so a producer can observe transitions (0→N start producing, N→0 stop). (`#79`)
+
 ## 1.0.1 — 2026-07-22
 
 ### Added

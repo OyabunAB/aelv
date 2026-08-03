@@ -33,11 +33,12 @@ fun <T : Any, R : Any> One<T>.map(transform: (T) -> R): One<R> {
 
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         source(
             { value -> emit(Signal.Upstream.Next(transform(value))) },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -47,18 +48,20 @@ fun <T : Any, R : Any> One<T>.map(transform: suspend (T) -> R): One<R> =
  * If this [One] errors, the error is forwarded without calling [transform].
  */
 fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         source(
             { value ->
                 transform(value).source(
                     { inner -> emit(Signal.Upstream.Next(inner)) },
                     { emit(Signal.Upstream.Complete) },
                     { issue -> emit(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
                 Signal.Downstream.Cancel
             },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -69,7 +72,7 @@ fun <T : Any, R : Any> One<T>.flatMap(transform: suspend (T) -> One<R>): One<R> 
  * If the inner [Many] itself errors, the error propagates and no further items are emitted.
  */
 fun <T : Any, R : Any> One<T>.flatMapMany(transform: suspend (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         source(
             { value ->
                 val result = transform(value).collect { inner -> emit(Signal.Upstream.Next(inner)) }
@@ -79,6 +82,7 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: suspend (T) -> Many<R>): Ma
             },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -90,11 +94,12 @@ fun <T : Any, R : Any> One<T>.flatMapMany(transform: suspend (T) -> Many<R>): Ma
  * If this [One] errors, the error is forwarded without calling [transform].
  */
 fun <T : Any, R : Any> One<T>.flatMapMaybe(transform: suspend (T) -> Maybe<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
+    Maybe { onNext, onComplete, onError, onRequest ->
         source(
-            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            { value -> transform(value).source(onNext, onComplete, onError, onRequest); Signal.Downstream.Cancel },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -152,7 +157,7 @@ suspend fun <T : Any> One<T>.await(timeout: Duration): Either<Exception, T> =
 fun <T : Any> One<T>.cache(): One<T> {
     val mutex  = Mutex()
     var cached: Cached<Outcome<T>> = Unset.left()
-    return One.generate { emit ->
+    return One.generate { emit, onRequest ->
         val result: Outcome<T> = mutex.withLock {
             when (val cachedResult = cached) {
                 is Failure  -> await().also { cached = it.right() }

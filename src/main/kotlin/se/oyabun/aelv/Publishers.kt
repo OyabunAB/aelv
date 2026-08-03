@@ -37,9 +37,10 @@ import java.util.concurrent.atomic.AtomicReference
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 
-typealias OnNext<T>  = suspend (T)         -> Signal.Downstream
-typealias OnComplete = suspend ()          -> Unit
-typealias OnError    = suspend (Exception) -> Unit
+typealias OnNext<T>      = suspend (T)         -> Signal.Downstream
+typealias OnComplete     = suspend ()          -> Unit
+typealias OnError        = suspend (Exception) -> Unit
+typealias OnRequest      = suspend (Long) -> Unit
 
 internal sealed interface Fusion<out T : Any> {
     data object None : Fusion<Nothing>
@@ -67,6 +68,7 @@ class Many<T : Any> private constructor(
             onNext:     OnNext<T>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit,
     ): Many<T> = Many.fused(block = block)
 
@@ -83,6 +85,7 @@ class Many<T : Any> private constructor(
             { value -> emit(value); Signal.Downstream.Request },
             { },
             ::rethrow,
+            Demand(),
         )
     }
 
@@ -100,7 +103,7 @@ class Many<T : Any> private constructor(
                 drain()
             }
         }
-        return when (val result = interpret(step, Frame.Collect(action))) {
+        return when (val result = interpret(step, Frame.Collect(action), Demand())) {
             is Success -> Unit.right()
             is Failure -> result.value.left()
         }
@@ -147,15 +150,15 @@ class Many<T : Any> private constructor(
         fun <T : Any> defer(factory: () -> Many<T>): Many<T> = Many(Step.Defer(factory))
 
         fun <T : Any> defer(factory: suspend () -> Many<T>): Many<T> =
-            fused { onNext, onComplete, onError ->
-                factory().source(onNext, onComplete, onError)
+            fused { onNext, onComplete, onError, onRequest ->
+                factory().source(onNext, onComplete, onError, onRequest)
             }
 
         fun <T : Any> pipelineFrom(): Many<T> = Many(Step.PipelineSource(), SourceFusion())
 
         fun interval(period: Duration): Many<Long> {
             require(period.isPositive()) { "interval period must be positive, got $period" }
-            return fused { onNext, _, _ ->
+            return fused { onNext, _, _, _ ->
                 tailrec suspend fun tick(n: Long) {
                     delay(period)
                     if (onNext(n) != Signal.Downstream.Cancel) tick(n + 1)
@@ -170,19 +173,23 @@ class Many<T : Any> private constructor(
                 onNext:     OnNext<T>,
                 onComplete: OnComplete,
                 onError:    OnError,
+                onRequest:  Demand,
             ) -> Unit,
         ): Many<T> = Many(Step.Suspend(block), fusion)
 
         internal fun <T : Any> generate(
-            block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
-        ): Many<T> = fused { onNext, onComplete, onError ->
-            block { signal ->
+            block: suspend (
+                emit:      suspend (Signal.Upstream<T>) -> Signal.Downstream,
+                onRequest: Demand,
+            ) -> Unit,
+        ): Many<T> = fused { onNext, onComplete, onError, onRequest ->
+            block({ signal ->
                 when (signal) {
                     is Signal.Upstream.Next     -> onNext(signal.value)
                     is Signal.Upstream.Complete -> { onComplete(); Signal.Downstream.Cancel }
                     is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
                 }
-            }
+            }, onRequest)
         }
 
         internal fun <T : Any> fromStep(step: Step<T>, fusion: Fusion<T> = Fusion.None): Many<T> =
@@ -197,9 +204,10 @@ class Many<T : Any> private constructor(
             onNext:     OnNext<B>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit {
             val upstream = Many(upstreamStep)
-            return { onNext, onComplete, onError ->
+            return { onNext, onComplete, onError, onRequest ->
                 val semaphore  = Semaphore(concurrency)
                 val queue      = java.util.concurrent.ConcurrentLinkedQueue<B>()
                 val wip        = java.util.concurrent.atomic.AtomicInteger(0)
@@ -253,6 +261,7 @@ class Many<T : Any> private constructor(
                                         },
                                         { },
                                         { issue -> outerError.compareAndSet(Unset, issue) },
+                                        onRequest,
                                     )
                                 } finally {
                                     semaphore.release()
@@ -262,6 +271,7 @@ class Many<T : Any> private constructor(
                         },
                         { },
                         { issue -> outerError.compareAndSet(Unset, issue) },
+                        onRequest,
                     )
                 }
                 val error = outerError.get()
@@ -291,6 +301,7 @@ class One<T : Any> private constructor(
             onNext:     OnNext<T>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit,
     ): One<T> = One(Step.Suspend(block))
 
@@ -307,19 +318,21 @@ class One<T : Any> private constructor(
             { value -> emit(value); Signal.Downstream.Request },
             { },
             ::rethrow,
+            Demand(),
         )
     }
 
-    fun asMany(): Many<T> = Many.generate { emit ->
+    fun asMany(): Many<T> = Many.generate { emit, onRequest ->
         source(
             { value -> emit(Signal.Upstream.Next(value)) },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
     companion object {
-        fun <T : Any> single(value: T): One<T> = One(Step.Suspend { onNext, onComplete, _ ->
+        fun <T : Any> single(value: T): One<T> = One(Step.Suspend { onNext, onComplete, _, _ ->
             if (onNext(value) != Signal.Downstream.Cancel) onComplete()
         })
 
@@ -329,21 +342,24 @@ class One<T : Any> private constructor(
          * Use [context] to shift execution to a specific [CoroutineContext].
          */
         fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> T): One<T> =
-            One(Step.Suspend { onNext, onComplete, _ ->
+            One(Step.Suspend { onNext, onComplete, _, _ ->
                 val value = if (context != null) withContext(currentCoroutineContext() + context) { closure() } else closure()
                 if (onNext(value) != Signal.Downstream.Cancel) onComplete()
             })
 
         internal fun <T : Any> generate(
-            block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
-        ): One<T> = One(Step.Suspend { onNext, onComplete, onError ->
-            block { signal ->
+            block: suspend (
+                emit:      suspend (Signal.Upstream<T>) -> Signal.Downstream,
+                onRequest: Demand,
+            ) -> Unit,
+        ): One<T> = One(Step.Suspend { onNext, onComplete, onError, onRequest ->
+            block({ signal ->
                 when (signal) {
                     is Signal.Upstream.Next     -> onNext(signal.value)
                     is Signal.Upstream.Complete -> { onComplete(); Signal.Downstream.Cancel }
                     is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
                 }
-            }
+            }, onRequest)
         })
 
         internal operator fun <T : Any> invoke(
@@ -351,18 +367,20 @@ class One<T : Any> private constructor(
                 onNext:     OnNext<T>,
                 onComplete: OnComplete,
                 onError:    OnError,
+                onRequest:  Demand,
             ) -> Unit,
         ): One<T> = One(Step.Suspend(block))
 
         @Suppress("UNCHECKED_CAST")
-        fun <T : Any> from(publisher: Publisher<T>): One<T> = One(Step.Suspend { onNext, onComplete, onError ->
+        fun <T : Any> from(publisher: Publisher<T>): One<T> = One(Step.Suspend { onNext, onComplete, onError, onRequest ->
             when (publisher) {
                 is Many<*> -> (publisher as Many<T>).source(
                     { value -> onNext(value); Signal.Downstream.Cancel },
                     onComplete,
                     onError,
+                    onRequest,
                 )
-                is One<*>  -> (publisher as One<T>).source(onNext, onComplete, onError)
+                is One<*>  -> (publisher as One<T>).source(onNext, onComplete, onError, onRequest)
                 else       -> { publisher.asFlow().collectCancelling { value -> onNext(value); false }; onComplete() }
             }
         })
@@ -376,7 +394,7 @@ class One<T : Any> private constructor(
         internal fun <T : Any> fromStep(step: Step<T>, fusion: Fusion<T> = Fusion.None): One<T> = One(step, fusion)
 
         fun <T : Any> create(block: (success: (T) -> Unit, failure: (Exception) -> Unit) -> Unit): One<T> =
-            One.generate { emit ->
+            One.generate { emit, _ ->
                 val result = suspendCancellableCoroutine<Either<Exception, T>> { continuation ->
                     var emitted = false
                     fun emit(value: Either<Exception, T>) {
@@ -417,6 +435,7 @@ class Maybe<T : Any> private constructor(
             onNext:     OnNext<T>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit,
     ): Maybe<T> = Maybe(Step.Suspend(block))
 
@@ -429,7 +448,7 @@ class Maybe<T : Any> private constructor(
 
     companion object {
 
-        fun <T : Any> present(value: T): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, _ ->
+        fun <T : Any> present(value: T): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, _, _ ->
             if (onNext(value) != Signal.Downstream.Cancel) onComplete()
         })
 
@@ -445,7 +464,7 @@ class Maybe<T : Any> private constructor(
          * If [closure] returns null, the stream completes empty.
          * Exceptions are caught and routed to [onError].
          */
-        fun <T : Any> defer(closure: suspend () -> T?): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
+        fun <T : Any> defer(closure: suspend () -> T?): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError, _ ->
             try {
                 val value = closure()
                 if (value != null) {
@@ -458,7 +477,7 @@ class Maybe<T : Any> private constructor(
             }
         })
 
-        fun <T : Any> from(publisher: Publisher<T>): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
+        fun <T : Any> from(publisher: Publisher<T>): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError, _ ->
             var emitted = false
             try {
                 publisher.asFlow().collectCancelling { value ->
@@ -476,15 +495,18 @@ class Maybe<T : Any> private constructor(
         })
 
         internal fun <T : Any> generate(
-            block: suspend (emit: suspend (Signal.Upstream<T>) -> Signal.Downstream) -> Unit,
-        ): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError ->
-            block { signal ->
+            block: suspend (
+                emit:      suspend (Signal.Upstream<T>) -> Signal.Downstream,
+                onRequest: Demand,
+            ) -> Unit,
+        ): Maybe<T> = Maybe(Step.Suspend { onNext, onComplete, onError, onRequest ->
+            block({ signal ->
                 when (signal) {
                     is Signal.Upstream.Next     -> onNext(signal.value)
                     is Signal.Upstream.Complete -> { onComplete(); Signal.Downstream.Cancel }
                     is Signal.Upstream.Error    -> { onError(signal.cause); Signal.Downstream.Cancel }
                 }
-            }
+            }, onRequest)
         })
 
         internal operator fun <T : Any> invoke(
@@ -492,6 +514,7 @@ class Maybe<T : Any> private constructor(
                 onNext:     OnNext<T>,
                 onComplete: OnComplete,
                 onError:    OnError,
+                onRequest:  Demand,
             ) -> Unit,
         ): Maybe<T> = Maybe(Step.Suspend(block))
 
@@ -515,6 +538,7 @@ class None<T : Any> private constructor(
             onNext:     OnNext<T>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit,
     ): None<T> = None(Step.Suspend(block))
 
@@ -533,7 +557,7 @@ class None<T : Any> private constructor(
          * Use [context] to shift execution to a specific [CoroutineContext].
          */
         fun <T : Any> defer(context: CoroutineContext? = null, closure: suspend () -> Unit): None<T> =
-            None(Step.Suspend { _, onComplete, onError ->
+            None(Step.Suspend { _, onComplete, onError, _ ->
                 try {
                     if (context != null) withContext(currentCoroutineContext() + context) { closure() } else closure()
                     onComplete()
@@ -543,12 +567,12 @@ class None<T : Any> private constructor(
             })
 
         internal fun <T : Any> generate(closure: suspend () -> Unit): None<T> =
-            None(Step.Suspend { _, onComplete, onError ->
+            None(Step.Suspend { _, onComplete, onError, _ ->
                 try { closure(); onComplete() } catch (e: Exception) { onError(e) }
             })
 
         fun <T : Any> from(publisher: Publisher<T>): None<T> =
-            None(Step.Suspend { _, onComplete, onError ->
+            None(Step.Suspend { _, onComplete, onError, _ ->
                 try { publisher.asFlow().collect { }; onComplete() } catch (e: Exception) { onError(e) }
             })
 

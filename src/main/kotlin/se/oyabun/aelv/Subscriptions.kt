@@ -27,6 +27,7 @@ import org.reactivestreams.Subscription
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.withLock
 
 private sealed interface ProducerState {
     data object Idle                : ProducerState
@@ -41,6 +42,35 @@ internal sealed interface SubscriptionState {
 
 /** Sentinel demand value meaning the subscriber accepts items at any rate — RS §3.17. */
 internal const val UNBOUNDED = Long.MAX_VALUE
+
+/**
+ * Propagating demand signal threaded from the subscription to the producer.
+ *
+ * The subscriber's [request] calls [invoke] with the requested amount. The signal flows
+ * through every pipeline component (each must accept and forward it) until it reaches the
+ * source that holds values. That source registers an observer via [observe] to track
+ * demand transitions (0→N start producing, N→0 stop). Requests that arrive before the
+ * observer registers are buffered and replayed.
+ */
+internal class Demand {
+    private val lock    = java.util.concurrent.locks.ReentrantLock()
+    private var observer: OnRequest? = null
+    private val pending = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+
+    suspend fun invoke(n: Long) {
+        val observer = lock.withLock { this.observer }
+        if (observer != null) observer(n) else pending.add(n)
+    }
+
+    suspend fun observe(observer: OnRequest) {
+        lock.withLock { this.observer = observer }
+        var n = pending.poll()
+        while (n != null) {
+            observer(n)
+            n = pending.poll()
+        }
+    }
+}
 
 private val sharedScope = CoroutineScope(Dispatchers.cpu + SupervisorJob())
 
@@ -61,6 +91,7 @@ internal class StreamSubscription<T : Any>(
         onNext:     OnNext<T>,
         onComplete: OnComplete,
         onError:    OnError,
+        onRequest:  Demand,
     ) -> Unit,
 ) : Subscription {
 
@@ -68,6 +99,7 @@ internal class StreamSubscription<T : Any>(
     private val name = subscriber.javaClass.simpleName.ifEmpty { "Subscriber" }
 
     private val demand     = AtomicLong(0L)
+    private val onRequest  = Demand()
     private val signal     by lazy { Channel<Unit>(Channel.UNLIMITED) }  // only allocated for bounded demand
     private val terminated = AtomicBoolean(false)
     private val started    = AtomicBoolean(false)
@@ -118,6 +150,7 @@ internal class StreamSubscription<T : Any>(
                     },
                     onComplete,
                     onError,
+                    onRequest,
                 )
             } else {
                 source(
@@ -130,6 +163,7 @@ internal class StreamSubscription<T : Any>(
                     },
                     onComplete,
                     onError,
+                    onRequest,
                 )
             }
         }
@@ -157,6 +191,7 @@ internal class StreamSubscription<T : Any>(
             if (UNBOUNDED - current < n) UNBOUNDED else current + n
         }
         if (demand.get() < UNBOUNDED) signal.trySend(Unit)  // only meaningful for bounded demand
+        sharedScope.launch { onRequest.invoke(n) }
     }
 
     override fun cancel() {

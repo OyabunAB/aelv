@@ -50,7 +50,7 @@ fun <T : Any> Publisher<T>.asNone(): None<T> = None.from(this)
  * the [Maybe] is present with that item and the remaining upstream items are discarded (the
  * subscription is cancelled).  Errors are forwarded as [Maybe] errors.
  */
-fun <T : Any> Many<T>.firstMaybe(): Maybe<T> = Maybe { onNext, onComplete, onError ->
+fun <T : Any> Many<T>.firstMaybe(): Maybe<T> = Maybe { onNext, onComplete, onError, onRequest ->
     var emitted = false
     source(
         { value ->
@@ -65,5 +65,6 @@ fun <T : Any> Many<T>.firstMaybe(): Maybe<T> = Maybe { onNext, onComplete, onErr
         },
         { if (!emitted) onComplete() },
         { issue -> onError(issue) },
+        onRequest,
     )
 }

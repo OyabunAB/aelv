@@ -58,6 +58,7 @@ class Verify<T : Any> private constructor(
                     { value -> items.add(value); Signal.Downstream.Request },
                     { terminal = Signal.Upstream.Complete },
                     { issue -> terminal = Signal.Upstream.Error(issue) },
+                    Demand(),
                 )
                 terminal
             }

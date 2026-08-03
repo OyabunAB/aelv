@@ -54,8 +54,9 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
         onNext:     OnNext<T>,
         onComplete: OnComplete,
         onError:    OnError,
+        onRequest:  Demand,
     ) {
-        when (val result = interpret(step, Frame.Collect(onNext))) {
+        when (val result = interpret(step, Frame.Collect(onNext), onRequest)) {
             // Note: Step.Suspend sources that exit early due to downstream cancel return Success(true),
             // causing onComplete() to fire after a cancel — a structural RS §1.7 violation.
             // In practice this is harmless: StreamSubscription guards with terminated.compareAndSet,
@@ -71,46 +72,50 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
             onNext:     OnNext<T>,
             onComplete: OnComplete,
             onError:    OnError,
+            onRequest:  Demand,
         ) -> Unit,
     ): Self
 
     internal open suspend fun collect(
         action: OnNext<T>,
-    ): Either<Exception, Unit> = when (val result = interpret(step, Frame.Collect(action))) {
+    ): Either<Exception, Unit> = when (val result = interpret(step, Frame.Collect(action), Demand())) {
         is Success -> Unit.right()
         is Failure -> result.value.left()
     }
 
-    fun doOnNext(action: suspend (T) -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doOnNext(action: suspend (T) -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         source(
             { value -> guardedSideEffectSuspend("doOnNext", log) { action(value) }; onNext(value) },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
-    fun doOnComplete(action: suspend () -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doOnComplete(action: suspend () -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         source(
             onNext,
             { guardedSideEffectSuspend("doOnComplete", log) { action() }; onComplete() },
             onError,
+            onRequest,
         )
     }
 
-    fun doOnError(action: suspend (Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doOnError(action: suspend (Exception) -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         source(
             onNext,
             onComplete,
             { issue -> guardedSideEffectSuspend("doOnError", log) { action(issue) }; onError(issue) },
+            onRequest,
         )
     }
 
-    fun doOnSubscribe(action: suspend () -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doOnSubscribe(action: suspend () -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         guardedSideEffectSuspend("doOnSubscribe", log) { action() }
-        source(onNext, onComplete, onError)
+        source(onNext, onComplete, onError, onRequest)
     }
 
-    fun doFinally(action: suspend (Signal.Terminal) -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doFinally(action: suspend (Signal.Terminal) -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         source(
             { value ->
                 val downstream = onNext(value)
@@ -119,19 +124,20 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
             },
             { guardedSideEffectSuspend("doFinally", log) { action(Signal.Upstream.Complete) }; onComplete() },
             { issue -> guardedSideEffectSuspend("doFinally", log) { action(Signal.Upstream.Error(issue)) }; onError(issue) },
+            onRequest,
         )
     }
 
-    fun recover(fallback: suspend (Exception) -> Self): Self = wrap { onNext, onComplete, onError ->
-        source(onNext, onComplete, { issue -> fallback(issue).source(onNext, onComplete, onError) })
+    fun recover(fallback: suspend (Exception) -> Self): Self = wrap { onNext, onComplete, onError, onRequest ->
+        source(onNext, onComplete, { issue -> fallback(issue).source(onNext, onComplete, onError, onRequest) }, onRequest)
     }
 
     fun retry(times: Long = Long.MAX_VALUE): Self = retry(Policy.retry().maxAttempts(times))
 
-    fun retry(policy: Policy.Retry): Self = wrap { onNext, onComplete, onError ->
+    fun retry(policy: Policy.Retry): Self = wrap { onNext, onComplete, onError, onRequest ->
         tailrec suspend fun attempt(attempts: Long) {
             var caught: Exception? = null
-            source(onNext, { }, { e -> caught = e })
+            source(onNext, { }, { e -> caught = e }, onRequest)
             val error = caught
             when {
                 error == null                  -> onComplete()
@@ -155,12 +161,13 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
      *
      * @param action receives the zero-based attempt number and the error that triggered the retry.
      */
-    fun doOnRetry(action: suspend (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doOnRetry(action: suspend (attempt: Long, cause: Exception) -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         var attempt = 0L
         source(
             onNext,
             onComplete,
             { cause -> guardedSideEffectSuspend("doOnRetry", log) { action(attempt++, cause) }; onError(cause) },
+            onRequest,
         )
     }
 
@@ -173,7 +180,7 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
      *
      * @param action receives the total number of errors that preceded this recovery.
      */
-    fun doOnRecover(action: suspend (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError ->
+    fun doOnRecover(action: suspend (retries: Long) -> Unit): Self = wrap { onNext, onComplete, onError, onRequest ->
         var retries  = 0L
         var recovered = false
         source(
@@ -186,33 +193,36 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
                 onComplete()
             },
             { cause -> retries++; recovered = true; onError(cause) },
+            onRequest,
         )
     }
 
-    fun publishOn(context: CoroutineContext): Self = wrap { onNext, onComplete, onError ->
+    fun publishOn(context: CoroutineContext): Self = wrap { onNext, onComplete, onError, onRequest ->
         source(
             { value -> withContext(currentCoroutineContext() + context) { onNext(value) } },
             { withContext(currentCoroutineContext() + context) { onComplete() } },
             { issue -> withContext(currentCoroutineContext() + context) { onError(issue) } },
+            onRequest,
         )
     }
 
-    fun subscribeOn(context: CoroutineContext): Self = wrap { onNext, onComplete, onError ->
+    fun subscribeOn(context: CoroutineContext): Self = wrap { onNext, onComplete, onError, onRequest ->
         withContext(currentCoroutineContext() + context) {
-            source(onNext, onComplete, onError)
+            source(onNext, onComplete, onError, onRequest)
         }
     }
 
-    fun delaySubscription(delay: Duration): Self = wrap { onNext, onComplete, onError ->
+    fun delaySubscription(delay: Duration): Self = wrap { onNext, onComplete, onError, onRequest ->
         kotlinx.coroutines.delay(delay)
-        source(onNext, onComplete, onError)
+        source(onNext, onComplete, onError, onRequest)
     }
 
-    fun delayElement(delay: Duration): Self = wrap { onNext, onComplete, onError ->
+    fun delayElement(delay: Duration): Self = wrap { onNext, onComplete, onError, onRequest ->
         source(
             { value -> kotlinx.coroutines.delay(delay); onNext(value) },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -222,7 +232,7 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
      * The timeout window covers only the time upstream takes to emit each signal — downstream
      * processing is excluded. Resets on each received item, so this is a per-item deadline.
      */
-    fun timeout(duration: Duration): Self = wrap { onNext, onComplete, onError ->
+    fun timeout(duration: Duration): Self = wrap { onNext, onComplete, onError, onRequest ->
         coroutineScope {
             val inbox = Channel<Signal.Upstream<T>>(Channel.BUFFERED)
             val producer = launch {
@@ -230,6 +240,7 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
                     { value -> inbox.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { inbox.send(Signal.Upstream.Complete) },
                     { e -> inbox.send(Signal.Upstream.Error(e)) },
+                    onRequest,
                 )
             }
             var done = false
@@ -246,14 +257,15 @@ abstract class Observable<T : Any, Self : Observable<T, Self>> : Source<T> {
         }
     }
 
-    fun delaySubscription(trigger: Publisher<*>): Self = wrap { onNext, onComplete, onError ->
+    fun delaySubscription(trigger: Publisher<*>): Self = wrap { onNext, onComplete, onError, onRequest ->
         var triggerFailed = false
         Many.from(trigger).source(
             { Signal.Downstream.Cancel },
             { },
             { issue -> triggerFailed = true; onError(issue) },
+            onRequest,
         )
-        if (!triggerFailed) source(onNext, onComplete, onError)
+        if (!triggerFailed) source(onNext, onComplete, onError, onRequest)
     }
 
     fun discard(): None<T> = None.defer { collect { Signal.Downstream.Request }.let { if (it is Failure) throw it.value } }
