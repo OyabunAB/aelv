@@ -19,8 +19,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import org.reactivestreams.Publisher
 
 class SinksTest {
 
@@ -96,6 +98,23 @@ class SinksTest {
             Verify.that(sink.asMany().delayElement(20.milliseconds).mergeWith(emitter))
                 .emitsCount((bufferSize + 2).toLong())
                 .completes(within = 5.seconds)
+        }
+
+        @Test
+        fun `onRequest fires with the requested demand when subscribed via publisher bridge`() {
+            val demands = Sinks.unicast<Long>()
+            val sink    = Sinks.broadcast<Int>()
+            sink.onRequest { n -> demands.emit(n) }
+            sink.emit(1, 2, 3)
+            sink.complete()
+
+            Verify.that(
+                Many.from(sink.asMany() as Publisher<Int>)
+                    .doOnComplete { demands.complete() }
+                    .discard()
+                    .andThen { demands.asMany() },
+            ).assertNext { assertTrue(it > 0L, "demand must be positive, got $it") }
+                .completes(within = 2.seconds)
         }
     }
 

@@ -28,11 +28,12 @@ fun <T : Any, R : Any> Maybe<T>.map(transform: (T) -> R): Maybe<R> {
 
 @LowPriorityInOverloadResolution
 fun <T : Any, R : Any> Maybe<T>.map(transform: suspend (T) -> R): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
+    Maybe { onNext, onComplete, onError, onRequest ->
         source(
             { value -> onNext(transform(value)) },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -44,12 +45,13 @@ fun <T : Any> Maybe<T>.filter(predicate: (T) -> Boolean): Maybe<T> {
 
 @LowPriorityInOverloadResolution
 fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
-    Maybe { onNext, onComplete, onError ->
+    Maybe { onNext, onComplete, onError, onRequest ->
         var emitComplete = false
         source(
             { value -> if (predicate(value)) onNext(value) else { emitComplete = true; Signal.Downstream.Cancel } },
             onComplete,
             onError,
+            onRequest,
         )
         // Call onComplete after source() returns, not from inside the onNext callback — RS §1.3.
         if (emitComplete) onComplete()
@@ -62,11 +64,12 @@ fun <T : Any> Maybe<T>.filter(predicate: suspend (T) -> Boolean): Maybe<T> =
  * If this [Maybe] errors, the error is forwarded without calling [transform].
  */
 fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
+    Maybe { onNext, onComplete, onError, onRequest ->
         source(
-            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            { value -> transform(value).source(onNext, onComplete, onError, onRequest); Signal.Downstream.Cancel },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -77,11 +80,12 @@ fun <T : Any, R : Any> Maybe<T>.flatMap(transform: suspend (T) -> Maybe<R>): May
  * If this [Maybe] errors, the error is forwarded without calling [transform].
  */
 fun <T : Any, R : Any> Maybe<T>.flatMapOne(transform: suspend (T) -> One<R>): Maybe<R> =
-    Maybe { onNext, onComplete, onError ->
+    Maybe { onNext, onComplete, onError, onRequest ->
         source(
-            { value -> transform(value).source(onNext, onComplete, onError); Signal.Downstream.Cancel },
+            { value -> transform(value).source(onNext, onComplete, onError, onRequest); Signal.Downstream.Cancel },
             onComplete,
             onError,
+            onRequest,
         )
     }
 
@@ -94,18 +98,20 @@ fun <T : Any, R : Any> Maybe<T>.flatMapOne(transform: suspend (T) -> One<R>): Ma
  * yield a [Many] that completes with zero items.
  */
 fun <T : Any, R : Any> Maybe<T>.flatMapMany(transform: suspend (T) -> Many<R>): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         source(
             { value ->
                 transform(value).source(
                     { inner -> emit(Signal.Upstream.Next(inner)) },
                     { emit(Signal.Upstream.Complete) },
                     { issue -> emit(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
                 Signal.Downstream.Cancel
             },
             { emit(Signal.Upstream.Complete) },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -125,7 +131,7 @@ fun <T : Any> Maybe<T>.flatMapNone(transform: suspend (T) -> None<T>): None<T> =
  * [fallback] is invoked and its result is emitted.
  */
 fun <T : Any> Maybe<T>.or(fallback: suspend () -> T): One<T> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         var emitted = false
         source(
             { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
@@ -136,6 +142,7 @@ fun <T : Any> Maybe<T>.or(fallback: suspend () -> T): One<T> =
                 emit(Signal.Upstream.Complete)
             },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -146,7 +153,7 @@ fun <T : Any> Maybe<T>.or(fallback: suspend () -> T): One<T> =
  * If it completes empty, [fallback] is subscribed and its items are forwarded.
  */
 fun <T : Any> Maybe<T>.orMany(fallback: suspend () -> Many<T>): Many<T> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         var emitted = false
         source(
             { value -> emitted = true; emit(Signal.Upstream.Next(value)) },
@@ -156,12 +163,14 @@ fun <T : Any> Maybe<T>.orMany(fallback: suspend () -> Many<T>): Many<T> =
                         { inner -> emit(Signal.Upstream.Next(inner)) },
                         { emit(Signal.Upstream.Complete) },
                         { issue -> emit(Signal.Upstream.Error(issue)) },
+                        onRequest,
                     )
                 } else {
                     emit(Signal.Upstream.Complete)
                 }
             },
             { issue -> emit(Signal.Upstream.Error(issue)) },
+            onRequest,
         )
     }
 
@@ -191,6 +200,7 @@ suspend fun <T : Any> Maybe<T>.await(): Either<Exception, T?> {
             { value -> result = value; Signal.Downstream.Cancel },
             { },
             ::rethrow,
+            Demand(),
         )
         result
     }

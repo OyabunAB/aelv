@@ -41,7 +41,7 @@ class BackpressureTest {
     fun `take — upstream produces exactly n items, no more`() = runTest {
         val produced = AtomicLong(0)
 
-        val source = Many.generate<Int> { emit ->
+        val source = Many.generate<Int> { emit, _ ->
             for (i in 0 until 10_000) {
                 produced.incrementAndGet()
                 if (emit(Signal.Upstream.Next(i)) == Signal.Downstream.Cancel) return@generate
@@ -70,7 +70,7 @@ class BackpressureTest {
     fun `takeWhile — upstream stops at first item that fails the predicate`() = runTest {
         val produced = AtomicLong(0)
 
-        val source = Many.generate<Int> { emit ->
+        val source = Many.generate<Int> { emit, _ ->
             for (i in 0 until 10_000) {
                 produced.incrementAndGet()
                 if (emit(Signal.Upstream.Next(i)) == Signal.Downstream.Cancel) return@generate
@@ -107,7 +107,7 @@ class BackpressureTest {
         withContext(Dispatchers.Default) {
             val stream: Many<Int> = Many.items(1, 2, 3, 4, 5, 6, 7, 8)
                 .flatMap<Int, Int>(concurrency = 4) { item: Int ->
-                    Many.generate { emit ->
+                    Many.generate { emit, _ ->
                         kotlinx.coroutines.yield()
                         emit(Signal.Upstream.Next(item))
                         emit(Signal.Upstream.Complete)
@@ -174,7 +174,7 @@ class BackpressureTest {
         val inFlight = AtomicInteger(0)
         val peakInFlight = AtomicInteger(0)
 
-        val source = Many.generate<Int> { emit ->
+        val source = Many.generate<Int> { emit, _ ->
             for (i in 0 until 1_000) {
                 inFlight.incrementAndGet().also { n ->
                     peakInFlight.updateAndGet { prev -> if (n > prev) n else prev }
@@ -207,7 +207,7 @@ class BackpressureTest {
         val consumed = AtomicInteger(0)
         val peakBuffered = AtomicInteger(0)
 
-        Many.generate<Int> { emit ->
+        Many.generate<Int> { emit, _ ->
             for (i in 0 until 200) {
                 produced.incrementAndGet()
                 peakBuffered.updateAndGet { prev ->
@@ -237,7 +237,7 @@ class BackpressureTest {
         val skip = 5L
         val take = 3L
 
-        val source = Many.generate<Int> { emit ->
+        val source = Many.generate<Int> { emit, _ ->
             for (i in 0 until 10_000) {
                 produced.incrementAndGet()
                 if (emit(Signal.Upstream.Next(i)) == Signal.Downstream.Cancel) return@generate

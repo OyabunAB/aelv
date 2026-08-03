@@ -58,7 +58,7 @@ class PublishersTest {
         @Test
         fun `cold - each subscriber gets independent execution`() = runTest {
             var count = 0
-            val many = Many.generate<Int> { emit ->
+            val many = Many.generate<Int> { emit, _ ->
                 emit(Signal.Upstream.Next(++count))
                 emit(Signal.Upstream.Complete)
             }

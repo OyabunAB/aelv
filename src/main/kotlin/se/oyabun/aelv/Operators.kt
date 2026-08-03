@@ -29,7 +29,7 @@ private data class FromB<out B : Any>(val value: B) : Tagged<Nothing, B>
  * Completes when all sources have completed.  Errors from any source are forwarded immediately.
  */
 fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         if (sources.isEmpty()) { emit(Signal.Upstream.Complete); return@generate }
         // Channel carries only Next and Error — never Complete.
         // Completion is tracked via an atomic counter so sources never block on a drained channel.
@@ -42,6 +42,7 @@ fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
                         { value -> channel.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                         { if (remaining.decrementAndGet() == 0) channel.close() },
                         { issue -> channel.send(Signal.Upstream.Error(issue)) },
+                        onRequest,
                     )
                 }
             }
@@ -72,7 +73,7 @@ fun <T : Any> merge(vararg sources: Many<T>): Many<T> =
  * to the next.  Errors from any source terminate the sequence immediately.
  */
 fun <T : Any> concat(vararg sources: Many<T>): Many<T> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         for (src in sources) {
             var cancelled = false
             val result = src.collect { value ->
@@ -89,7 +90,7 @@ fun <T : Any> concat(vararg sources: Many<T>): Many<T> =
  * Completes when the shorter source is exhausted.
  */
 fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         val channelA = Channel<Signal.Upstream<A>>(Channel.BUFFERED)
         val channelB = Channel<Signal.Upstream<B>>(Channel.BUFFERED)
         coroutineScope {
@@ -98,6 +99,7 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
                     { value -> channelA.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { channelA.send(Signal.Upstream.Complete) },
                     { issue -> channelA.send(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
             }
             val jobB = launch {
@@ -105,6 +107,7 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
                     { value -> channelB.send(Signal.Upstream.Next(value)); Signal.Downstream.Request },
                     { channelB.send(Signal.Upstream.Complete) },
                     { issue -> channelB.send(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
             }
             var zipError: Any = Unset
@@ -129,7 +132,7 @@ fun <A : Any, B : Any, R : Any> zip(a: Many<A>, b: Many<B>, transform: (A, B) ->
  * If either source completes without emitting, the result completes empty.
  */
 fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R): One<R> =
-    One.generate { emit ->
+    One.generate { emit, onRequest ->
         var valueA: Either<Unset, A> = Unset.left()
         val resultA = a.collect { v -> valueA = v.right(); Signal.Downstream.Cancel }
         if (resultA is Failure) { emit(Signal.Upstream.Error(resultA.value)); return@generate }
@@ -155,7 +158,7 @@ fun <A : Any, B : Any, R : Any> zip(a: One<A>, b: One<B>, transform: (A, B) -> R
  * other source.  Does not emit until both sources have emitted at least one item.
  */
 fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform: (A, B) -> R): Many<R> =
-    Many.generate { emit ->
+    Many.generate { emit, onRequest ->
         // Channel carries tagged values (FromA/FromB) plus errors.
         // All producer signals pass through the channel — single collector, serial emit — RS 1.3.
         val channel = Channel<Signal.Upstream<Tagged<A, B>>>(Channel.BUFFERED)
@@ -165,6 +168,7 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                     { value -> channel.send(Signal.Upstream.Next(FromA(value))); Signal.Downstream.Request },
                     { },
                     { issue -> channel.send(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
             }
             val jobB = launch {
@@ -172,6 +176,7 @@ fun <A : Any, B : Any, R : Any> combineLatest(a: Many<A>, b: Many<B>, transform:
                     { value -> channel.send(Signal.Upstream.Next(FromB(value))); Signal.Downstream.Request },
                     { },
                     { issue -> channel.send(Signal.Upstream.Error(issue)) },
+                    onRequest,
                 )
             }
             val closerJob = launch {
@@ -251,7 +256,7 @@ fun <R : Any, T : Any> Many.Companion.resource(
     use:     (R) -> Many<T>,
 ): Many<T> =
     acquire().flatMapMany { resource ->
-        Many.generate { emit -> bracket(resource, release, emit) { use(resource) } }
+        Many.generate { emit, onRequest -> bracket(resource, release, emit) { use(resource) } }
     }
 
 fun <R : Any, T : Any> One.Companion.resource(
@@ -260,7 +265,7 @@ fun <R : Any, T : Any> One.Companion.resource(
     use:     (R) -> One<T>,
 ): One<T> =
     acquire().flatMap { resource ->
-        Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
+        Many.generate<T> { emit, _ -> bracket(resource, release, emit) { use(resource).toMany() } }
             .firstMaybe()
             .or { throw NoElementException() }
     }
@@ -271,7 +276,7 @@ fun <R : Any, T : Any> Maybe.Companion.resource(
     use:     (R) -> Maybe<T>,
 ): Maybe<T> =
     acquire().flatMapMaybe { resource ->
-        Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
+        Many.generate<T> { emit, _ -> bracket(resource, release, emit) { use(resource).toMany() } }
             .firstMaybe()
     }
 
@@ -281,5 +286,5 @@ fun <R : Any, T : Any> None.Companion.resource(
     use:     (R) -> None<T>,
 ): None<T> =
     acquire().flatMapMany { resource ->
-        Many.generate<T> { emit -> bracket(resource, release, emit) { use(resource).toMany() } }
+        Many.generate<T> { emit, _ -> bracket(resource, release, emit) { use(resource).toMany() } }
     }.discard()
