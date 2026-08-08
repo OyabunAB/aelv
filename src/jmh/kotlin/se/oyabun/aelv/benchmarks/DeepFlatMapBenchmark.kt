@@ -25,11 +25,7 @@ import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import reactor.core.publisher.Flux
 import se.oyabun.aelv.Many
-import se.oyabun.aelv.await
-import se.oyabun.aelv.concatMap
 import se.oyabun.aelv.rightOrThrow
-import se.oyabun.aelv.take
-import se.oyabun.aelv.toList
 import java.util.concurrent.CountDownLatch
 
 /**
@@ -65,7 +61,7 @@ open class DeepFlatMapBenchmark {
         fun step(n: Int): RxObservable<Int> =
             if (n <= 0) RxObservable.just(42)
             else RxObservable.just(42).flatMap { step(n - 1) }
-        step(depth).take(1).blockingFirst()!!
+        step(depth).take(1).blockingFirst()
     } catch (_: Throwable) { OVERFLOW }
 
     @Benchmark
@@ -92,7 +88,7 @@ open class DeepFlatMapBenchmark {
         fun step(n: Int): MonixObservable<Any> =
             if (n <= 0) MonixObservable.now(42 as Any)
             else MonixObservable.now(42 as Any)
-                .flatMap { v: Any -> step(n - 1) as MonixObservable<Any> }
+                .flatMap { _: Any -> step(n - 1) }
         var value: Any? = null
         val latch = CountDownLatch(1)
         var err: Throwable? = null

@@ -70,7 +70,7 @@ class OperatorsTest {
 
         @Test
         fun `mapNotNull on all-null source emits nothing`() {
-            Verify.that(Many.items(1, 3, 5).mapNotNull<Int, Int> { null })
+            Verify.that(Many.items(1, 3, 5).mapNotNull<Int> { null })
                 .completes()
         }
 
@@ -182,7 +182,7 @@ class OperatorsTest {
         fun `merge interleaves two streams`() {
             val a      = Many.items(1, 3)
             val b      = Many.items(2, 4)
-            val result = merge(a, b).toList().map { it.sorted() }
+            val result = Many.merge(a, b).toList().map { it.sorted() }
             Verify.that(result).emitsNext(listOf(1, 2, 3, 4)).completes()
         }
 
@@ -198,13 +198,13 @@ class OperatorsTest {
         fun `concat sequences streams in order`() {
             val a = Many.items(1, 2)
             val b = Many.items(3, 4)
-            Verify.that(concat(a, b)).emitsNext(1, 2, 3, 4).completes()
+            Verify.that(Many.concat(a, b)).emitsNext(1, 2, 3, 4).completes()
         }
 
         @Test
         fun `concat with empty streams`() {
             val source = Many.items(1, 2)
-            Verify.that(concat(Many.empty(), source, Many.empty<Int>()))
+            Verify.that(Many.concat(Many.empty(), source, Many.empty<Int>()))
                 .emitsNext(1, 2)
                 .completes()
         }
@@ -213,7 +213,7 @@ class OperatorsTest {
         fun `zip pairs items from two streams`() {
             val numbers = Many.items(1, 2, 3)
             val letters = Many.items("a", "b", "c")
-            Verify.that(zip(numbers, letters) { n, s -> "$n$s" })
+            Verify.that(Many.zip(numbers, letters) { n, s -> "$n$s" })
                 .emitsNext("1a", "2b", "3c")
                 .completes()
         }
@@ -227,7 +227,7 @@ class OperatorsTest {
                 emit(Signal.Upstream.Error(cause))
             }
             val sourceB = Many.items("a")
-            Verify.that(zip(sourceA, sourceB) { n, s -> "$n$s" })
+            Verify.that(Many.zip(sourceA, sourceB) { n, s -> "$n$s" })
                 .emitsNext("1a")
                 .completes()
         }
@@ -626,7 +626,7 @@ class OperatorsTest {
                 outerSink.complete()
             }.toMany()
             Verify.that(
-                merge(
+                Many.merge(
                     outerSink.asMany().switchMap { outer ->
                         if (outer == 1) Many.never() else Many.items(outer * 10)
                     },
@@ -864,7 +864,7 @@ class OperatorsTest {
         fun `combineLatest pairs latest values`() {
             val numbers = Many.items(1, 2)
             val letters = Many.items("a", "b")
-            val result  = combineLatest(numbers, letters) { n, s -> "$n$s" }.toList().map { it.last() }
+            val result  = Many.combineLatest(numbers, letters) { n, s -> "$n$s" }.toList().map { it.last() }
             Verify.that(result).emitsNext("2b").completes()
         }
 
@@ -872,7 +872,7 @@ class OperatorsTest {
         fun `combineLatest on empty source completes without items`() {
             val empty   = Many.empty<Int>()
             val letters = Many.items("a")
-            Verify.that(combineLatest(empty, letters) { n, s -> "$n$s" })
+            Verify.that(Many.combineLatest(empty, letters) { n, s -> "$n$s" })
                 .completes()
         }
     }
@@ -883,7 +883,7 @@ class OperatorsTest {
         fun `zip pairs two One values`() {
             val one   = One.single(1)
             val other = One.single("a")
-            Verify.that(zip(one, other) { n, s -> "$n$s" })
+            Verify.that(One.zip(one, other) { n, s -> "$n$s" })
                 .emitsNext("1a")
                 .completes()
         }
@@ -893,7 +893,7 @@ class OperatorsTest {
             val empty  = One.defer<Int> { throw NoElementException() }.recover { One.single(0) }
                 .flatMap { One.generate<Int> { emit, _ -> emit(Signal.Upstream.Complete) } }
             val other  = One.single("a")
-            val result = zip(empty, other) { n, s -> "$n$s" }.await()
+            val result = One.zip(empty, other) { n, s -> "$n$s" }.await()
             assertIs<Failure<AelvException>>(result)
         }
 
@@ -902,14 +902,14 @@ class OperatorsTest {
             val cause  = InvalidDemandException(-1)
             val first  = One.error<Int>(cause)
             val second = One.single("a")
-            Verify.that(zip(first, second) { n, s -> "$n$s" })
+            Verify.that(One.zip(first, second) { n, s -> "$n$s" })
                 .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }
 
         @Test
         fun `zip propagates error from second source`() {
             val cause = InvalidDemandException(-1)
-            Verify.that(zip(One.single(1), One.error<String>(cause)) { n, s -> "$n$s" })
+            Verify.that(One.zip(One.single(1), One.error<String>(cause)) { n, s -> "$n$s" })
 
                 .failsWith<InvalidDemandException> { assertEquals(cause, it) }
         }

@@ -29,8 +29,8 @@ class ManyVerification : PublisherVerification<Int>(TestEnvironment(3000L, 500L)
 
     override fun createFailedPublisher(): Publisher<Int> = Publisher { subscriber ->
         subscriber.onSubscribe(object : org.reactivestreams.Subscription {
-            override fun request(n: Long) {}
-            override fun cancel() {}
+            override fun request(n: Long) { /* no operation */ }
+            override fun cancel() { /* no operation */ }
         })
         subscriber.onError(RuntimeException("tck failed publisher"))
     }

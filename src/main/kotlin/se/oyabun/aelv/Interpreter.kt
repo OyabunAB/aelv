@@ -195,14 +195,14 @@ private suspend fun resolve(
         is Step.Defer<*> -> {
             val obs = step.factory()
             val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe, req -> (obs as Observable<Any, *>).source(on, oc, oe, req) }
-            todo[0] = Work(RunSource.Pending(nextStep as Step<Any>), currentFrame)
+            todo[0] = Work(RunSource.Pending(nextStep), currentFrame)
             return
         }
         is Step.PipelineSource<*> -> {
             val obs = currentCoroutineContext()[SourceSlot]?.publisher as? Observable<*, *>
                 ?: error("pipelineFrom() executed without a bound source — use applyTo() or then()")
             val nextStep = if (obs is Many<*>) obs.step else Step.Suspend { on, oc, oe, req -> (obs as Observable<Any, *>).source(on, oc, oe, req) }
-            todo[0] = Work(RunSource.Pending(nextStep as Step<Any>), currentFrame)
+            todo[0] = Work(RunSource.Pending(nextStep), currentFrame)
             return
         }
 

@@ -78,7 +78,7 @@ class UnicastSinkTest {
     fun `subscriber receives items emitted after subscription`() {
         val sink    = Sinks.unicast<Int>()
         val emitter = None.defer<Int> { sink.emit(1); sink.emit(2); sink.complete() }.toMany()
-        Verify.that(merge(sink.asMany(), emitter))
+        Verify.that(Many.merge(sink.asMany(), emitter))
             .emitsNext(1, 2)
             .completes()
     }

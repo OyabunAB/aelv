@@ -32,17 +32,7 @@ import se.oyabun.aelv.Many
 import se.oyabun.aelv.One
 import se.oyabun.aelv.Signal
 import se.oyabun.aelv.Sinks
-import se.oyabun.aelv.await
-import se.oyabun.aelv.concatMap
-import se.oyabun.aelv.filter
-import se.oyabun.aelv.flatMap
-import se.oyabun.aelv.flatMapMany
-import se.oyabun.aelv.fold
-import se.oyabun.aelv.map
-import se.oyabun.aelv.merge
 import se.oyabun.aelv.rightOrThrow
-import se.oyabun.aelv.take
-import se.oyabun.aelv.toList
 
 @BenchmarkMode(Mode.Throughput)
 @State(JmhScope.Thread)
@@ -100,7 +90,7 @@ open class AelvBenchmark {
                 .toList().await()
         }.rightOrThrow().size
 
-    private fun ioWork(i: Int): Many<Int> = Many.generate { emit ->
+    private fun ioWork(i: Int): Many<Int> = Many.generate { emit, _ ->
         kotlinx.coroutines.delay(Workload.IO_DELAY_MS)
         for (k in 0 until Workload.ITEMS_PER_CALL) emit(Signal.Upstream.Next(i + k))
         emit(Signal.Upstream.Complete)

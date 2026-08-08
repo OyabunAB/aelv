@@ -84,5 +84,5 @@ open class RxJavaBenchmark {
     fun fold_sum(): Long =
         Observable.range(0, size)
             .reduce(0L) { acc, i -> acc + i }
-            .blockingGet()!!
+            .blockingGet()
 }

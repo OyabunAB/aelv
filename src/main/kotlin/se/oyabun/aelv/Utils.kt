@@ -20,8 +20,34 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Job
 
 internal object Unset
+
+private typealias Cached<T> = Either<Unset, T>
+
+/**
+ * A handle returned by [subscribe] and [drain] that allows cancelling an active subscription.
+ */
+interface Disposable {
+    /** Cancels the subscription, stopping item delivery. */
+    fun cancel()
+}
+
+sealed interface TimerState {
+    data object Idle                : TimerState
+    data class  Running(val job: Job) : TimerState
+    fun cancel() = if (this is Running) job.cancel() else Unit
+}
+
+private sealed interface BufferEvent<out T : Any> {
+    data object TimerFlush                                    : BufferEvent<Nothing>
+    data class  SourceSignal<out T : Any>(val signal: Signal.Upstream<T>) : BufferEvent<T>
+}
+
+private sealed interface Tagged<out A : Any, out B : Any>
+private data class FromA<out A : Any>(val value: A) : Tagged<A, Nothing>
+private data class FromB<out B : Any>(val value: B) : Tagged<Nothing, B>
 
 internal fun AtomicReference<Any>.isSet(): Boolean = get() !== Unset
 

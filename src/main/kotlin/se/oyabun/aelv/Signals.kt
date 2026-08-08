@@ -15,6 +15,11 @@
  */
 package se.oyabun.aelv
 
+typealias OnNext<T>  = suspend (T)         -> Signal.Downstream
+typealias OnComplete = suspend ()          -> Unit
+typealias OnError    = suspend (Exception) -> Unit
+typealias OnRequest  = suspend (Long)      -> Unit
+
 /**
  * Complete signal vocabulary for the aelv reactive streams protocol.
  *

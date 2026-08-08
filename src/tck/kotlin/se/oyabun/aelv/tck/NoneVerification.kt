@@ -21,7 +21,6 @@ import org.reactivestreams.tck.TestEnvironment
 import org.testng.annotations.Test
 import se.oyabun.aelv.Many
 import se.oyabun.aelv.None
-import se.oyabun.aelv.concatWith
 
 @Test
 class NoneVerification : PublisherVerification<Int>(TestEnvironment()) {
@@ -36,8 +35,8 @@ class NoneVerification : PublisherVerification<Int>(TestEnvironment()) {
 
     override fun createFailedPublisher(): Publisher<Int> = Publisher { subscriber ->
         subscriber.onSubscribe(object : org.reactivestreams.Subscription {
-            override fun request(n: Long) {}
-            override fun cancel() {}
+            override fun request(n: Long) { /* no operation */ }
+            override fun cancel() { /* no operation */ }
         })
         subscriber.onError(RuntimeException("tck failed publisher"))
     }

@@ -54,7 +54,7 @@ class SinksTest {
             val sub1    = sink.asMany()
             val sub2    = sink.asMany()
             val trigger = None.defer<Int> { sink.error(RuntimeException("boom")) }.toMany()
-            Verify.that(merge(sub1, sub2, trigger))
+            Verify.that(Many.merge(sub1, sub2, trigger))
                 .failsWith<RuntimeException>(within = 5.seconds) { assertEquals("boom", it.message) }
         }
 
@@ -63,7 +63,7 @@ class SinksTest {
             val sub1    = sink.asMany()
             val sub2    = sink.asMany()
             val trigger = None.defer<Int> { sink.complete() }.toMany()
-            Verify.that(merge(sub1, sub2, trigger))
+            Verify.that(Many.merge(sub1, sub2, trigger))
                 .completes(within = 5.seconds)
         }
 
@@ -194,7 +194,7 @@ class SinksTest {
                 canContinue.send(Unit)
             }.toMany()
 
-            Verify.that(merge(consumer, producer))
+            Verify.that(Many.merge(consumer, producer))
                 .emitsNext(1, 2)
                 .completes(within = 2.seconds)
         }

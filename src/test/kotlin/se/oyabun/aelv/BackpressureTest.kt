@@ -106,7 +106,7 @@ class BackpressureTest {
 
         withContext(Dispatchers.Default) {
             val stream: Many<Int> = Many.items(1, 2, 3, 4, 5, 6, 7, 8)
-                .flatMap<Int, Int>(concurrency = 4) { item: Int ->
+                .flatMap<Int>(concurrency = 4) { item: Int ->
                     Many.generate { emit, _ ->
                         kotlinx.coroutines.yield()
                         emit(Signal.Upstream.Next(item))
@@ -146,7 +146,7 @@ class BackpressureTest {
     fun `zip — completes when shorter source is exhausted, no deadlock`() {
         runBlocking(Dispatchers.Default) {
             val result = withTimeout(3.seconds) {
-                zip(
+                Many.zip(
                     Many.items(1, 2),
                     Many.from((1..200).map { "x$it" }),
                 ) { n, s -> "$n$s" }
@@ -271,7 +271,7 @@ class BackpressureTest {
         runBlocking(Dispatchers.Default) {
             for (i in 0 until 100) {
                 val n = 200
-                val outcome = combineLatest(
+                val outcome = Many.combineLatest(
                     Many.from((1..n).toList()),
                     Many.from((1..n).toList()),
                 ) { a, b ->
