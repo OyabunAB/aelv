@@ -11,7 +11,7 @@ jmh               = "1.37"
 reactor           = "3.8.6"
 rxjava            = "3.1.12"
 mutiny            = "3.3.0"
-monix             = "3.4.1"
+monix             = "3.5.0"
 
 [libraries]
 reactive_streams     = { group = "org.reactivestreams",      name = "reactive-streams",            version.ref = "reactive_streams" }
